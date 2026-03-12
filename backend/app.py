@@ -36,7 +36,6 @@ GEMINI_API_KEY = (
     os.getenv("GEMINI_API_KEY", "").strip()
     or os.getenv("EXPO_PUBLIC_GEMINI_API_KEY", "").strip()
 )
-# Defaulting to Flash for maximum speed during your demo
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() 
 PORT = int(os.getenv("PORT", "5000"))
 DB_CONNECT_TIMEOUT_MS = int(os.getenv("DB_CONNECT_TIMEOUT_MS", "8000"))
@@ -65,11 +64,14 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 def _serialize_doc(doc: dict) -> dict:
+    if not doc: return doc
     out = dict(doc)
     if "_id" in out:
         out["_id"] = str(out["_id"])
     if isinstance(out.get("date"), datetime):
         out["date"] = out["date"].isoformat()
+    if isinstance(out.get("dueDate"), datetime):
+        out["dueDate"] = out["dueDate"].isoformat()
     return out
 
 def _parse_object_id(raw_id: str) -> ObjectId:
@@ -94,13 +96,6 @@ def _parse_filter_datetime(raw_value: str | None, field_name: str, end_of_day: b
     if end_of_day and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
         parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
     return parsed.astimezone(timezone.utc)
-
-def _normalize_limit(raw_limit, default: int = 500, max_limit: int = 5000) -> int:
-    try:
-        limit = int(raw_limit)
-    except (TypeError, ValueError):
-        limit = default
-    return max(1, min(max_limit, limit))
 
 def _build_journal_query(user_id: str, start_date: str | None = None, end_date: str | None = None, text_query: str | None = None) -> dict:
     uid = str(user_id).strip()
@@ -132,7 +127,7 @@ def _get_mongo_client() -> MongoClient:
 
 def _get_collections():
     database = _get_mongo_client()[db_name]
-    return database["journals"], database["emotionhistories"]
+    return database["journals"], database["emotionhistories"], database["tasks"]
 
 def _get_gemini_http_client() -> httpx.AsyncClient:
     global _gemini_http_client
@@ -185,10 +180,12 @@ async def close_clients():
 def health_check():
     return {"status": "ok"}
 
+# ==================== JOURNALS ====================
+
 @app.get("/api/journals")
 def get_journals(userId: str | None = None):
     if not userId: return []
-    journals, _ = _get_collections()
+    journals, _, _ = _get_collections()
     docs = list(journals.find({"userId": userId}).sort("date", DESCENDING))
     return [_serialize_doc(doc) for doc in docs]
 
@@ -203,7 +200,7 @@ def search_journals(
 ):
     try:
         query = _build_journal_query(user_id=userId, start_date=startDate, end_date=endDate, text_query=q)
-        journals, _ = _get_collections()
+        journals, _, _ = _get_collections()
         direction = ASCENDING if sort.lower() == "asc" else DESCENDING
         docs = list(journals.find(query).sort("date", direction).limit(limit))
         return [_serialize_doc(doc) for doc in docs]
@@ -212,7 +209,7 @@ def search_journals(
 
 @app.post("/api/journals")
 async def create_journal(request: Request):
-    journals, _ = _get_collections()
+    journals, _, _ = _get_collections()
     payload = await request.json()
     doc = {
         "userId": str(payload.get("userId", "")),
@@ -229,7 +226,7 @@ async def create_journal(request: Request):
 @app.delete("/api/journals/{journal_id}")
 def delete_journal(journal_id: str):
     try:
-        journals, _ = _get_collections()
+        journals, _, _ = _get_collections()
         oid = _parse_object_id(journal_id)
         result = journals.delete_one({"_id": oid})
         if result.deleted_count == 0:
@@ -241,7 +238,7 @@ def delete_journal(journal_id: str):
 @app.put("/api/journals/{journal_id}")
 async def update_journal(journal_id: str, request: Request):
     try:
-        journals, _ = _get_collections()
+        journals, _, _ = _get_collections()
         oid = _parse_object_id(journal_id)
         payload = await request.json()
         allowed_fields = {"userId", "userEmail", "title", "content", "date", "sentimentScore", "aiAnalysis"}
@@ -253,6 +250,60 @@ async def update_journal(journal_id: str, request: Request):
         return _serialize_doc(updated)
     except Exception:
         return JSONResponse(status_code=500, content={"error": "Failed to update journal"})
+
+# ==================== TASKS ====================
+
+@app.get("/api/tasks")
+def get_tasks(userId: str | None = None):
+    if not userId: return []
+    _, _, tasks = _get_collections()
+    docs = list(tasks.find({"userId": userId}).sort("date", DESCENDING))
+    return [_serialize_doc(doc) for doc in docs]
+
+@app.post("/api/tasks")
+async def create_task(request: Request):
+    _, _, tasks = _get_collections()
+    payload = await request.json()
+    doc = {
+        "userId": str(payload.get("userId", "")),
+        "title": str(payload.get("title", "Untitled Task")),
+        "description": str(payload.get("description", "")),
+        "status": str(payload.get("status", "pending")),
+        "date": _utc_now(),
+    }
+    inserted = tasks.insert_one(doc)
+    return JSONResponse(status_code=201, content=_serialize_doc(tasks.find_one({"_id": inserted.inserted_id})))
+
+@app.put("/api/tasks/{task_id}")
+async def update_task(task_id: str, request: Request):
+    try:
+        _, _, tasks = _get_collections()
+        oid = _parse_object_id(task_id)
+        payload = await request.json()
+        allowed_fields = {"title", "description", "status"}
+        updates = {k: v for k, v in payload.items() if k in allowed_fields}
+        if not updates:
+            return JSONResponse(status_code=400, content={"error": "No valid fields to update"})
+        tasks.update_one({"_id": oid}, {"$set": updates})
+        updated = tasks.find_one({"_id": oid})
+        return _serialize_doc(updated)
+    except Exception:
+        return JSONResponse(status_code=500, content={"error": "Failed to update task"})
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: str):
+    try:
+        _, _, tasks = _get_collections()
+        oid = _parse_object_id(task_id)
+        result = tasks.delete_one({"_id": oid})
+        if result.deleted_count == 0:
+            return JSONResponse(status_code=404, content={"error": "Task not found"})
+        return {"message": "Task deleted successfully"}
+    except Exception:
+        return JSONResponse(status_code=500, content={"error": "Failed to delete task"})
+
+
+# ==================== AI CAPABILITIES ====================
 
 @app.post("/api/analyze")
 async def analyze_journal(request: Request):
@@ -290,18 +341,179 @@ async def detect_emotion(
         }
 
         try:
-            _, emotion_history = _get_collections()
+            _, emotion_history, _ = _get_collections()
             emotion_history.insert_one(emotion_doc)
         except PyMongoError:
-            pass # Continue even if saving history fails
+            pass 
 
         return emotion_data
     except Exception as e:
         import traceback
         print("\n=== GEMINI API CRASH ===")
-        traceback.print_exc()  # This prints the deep system error
+        traceback.print_exc()
         print("========================\n")
         return JSONResponse(status_code=500, content={"error": "Detection failed"})
+
+# ==================== CHAT AGENT ====================
+
+@app.post("/api/chat")
+async def chat_agent(request: Request):
+    """
+    AI Chat Agent using Groq and Function Calling.
+    Provides tools for the AI to manage Tasks and read Journals.
+    """
+    if not groq_client:
+        return JSONResponse(status_code=500, content={"error": "Groq client not configured"})
+
+    payload = await request.json()
+    user_id = payload.get("userId")
+    messages = payload.get("messages", [])
+
+    if not user_id:
+        return JSONResponse(status_code=400, content={"error": "userId is required"})
+
+    # Define tools
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_tasks",
+                "description": "Get all tasks for the user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_task",
+                "description": "Create a new task.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Title of the task"},
+                        "description": {"type": "string", "description": "Description of the task"},
+                        "status": {"type": "string", "description": "Status (e.g., pending, completed)"}
+                    },
+                    "required": ["title"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_task",
+                "description": "Update an existing task status.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task_id": {"type": "string", "description": "ID of the task to update"},
+                        "status": {"type": "string", "description": "New status (e.g., completed, pending)"}
+                    },
+                    "required": ["task_id", "status"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_journals",
+                "description": "Get recent journal entries for the user to understand their mood or history.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        }
+    ]
+
+    try:
+        # System message setup
+        system_msg = {
+            "role": "system", 
+            "content": "You are MindSync AI, an empathetic and helpful personal assistant. You can manage tasks and review the user's journal entries to better understand their context and feelings. You may use tools to achieve this."
+        }
+        
+        call_messages = [system_msg] + messages
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=call_messages,
+            tools=tools,
+            tool_choice="auto",
+            max_tokens=4096
+        )
+
+        response_message = response.choices[0].message
+
+        # Check if the model wants to call a function
+        tool_calls = response_message.tool_calls
+        if tool_calls:
+            call_messages.append({
+                "role": "assistant",
+                "content": response_message.content,
+                "tool_calls": [t.model_dump() for t in tool_calls]
+            })
+
+            journals, _, tasks = _get_collections()
+
+            for tool_call in tool_calls:
+                function_name = tool_call.function.name
+                function_args = json.loads(tool_call.function.arguments)
+
+                tool_response = ""
+
+                if function_name == "get_tasks":
+                    docs = list(tasks.find({"userId": user_id}).sort("date", DESCENDING).limit(10))
+                    tool_response = json.dumps([_serialize_doc(d) for d in docs])
+                elif function_name == "create_task":
+                    doc = {
+                        "userId": user_id,
+                        "title": function_args.get("title", "Untitled Task"),
+                        "description": function_args.get("description", ""),
+                        "status": function_args.get("status", "pending"),
+                        "date": _utc_now()
+                    }
+                    inserted = tasks.insert_one(doc)
+                    tool_response = json.dumps({"status": "success", "taskId": str(inserted.inserted_id)})
+                elif function_name == "update_task":
+                    try:
+                        oid = _parse_object_id(function_args.get("task_id"))
+                        tasks.update_one({"_id": oid}, {"$set": {"status": function_args.get("status")}})
+                        tool_response = json.dumps({"status": "success"})
+                    except:
+                        tool_response = json.dumps({"status": "error", "message": "Invalid task ID"})
+                elif function_name == "get_journals":
+                    docs = list(journals.find({"userId": user_id}).sort("date", DESCENDING).limit(5))
+                    tool_response = json.dumps([_serialize_doc(d) for d in docs])
+                else:
+                    tool_response = json.dumps({"error": "Unknown function"})
+
+                call_messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "name": function_name,
+                    "content": tool_response
+                })
+
+            # Call the model again with the function response
+            second_response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=call_messages,
+                max_tokens=4096
+            )
+            return {"role": "assistant", "content": second_response.choices[0].message.content}
+
+        return {"role": "assistant", "content": response_message.content}
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": "Chat completion failed"})
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=False)

