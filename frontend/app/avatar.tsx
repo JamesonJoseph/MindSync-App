@@ -7,12 +7,11 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
-  Dimensions,
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Video, ResizeMode } from 'expo-av';
+import { Video, ResizeMode, useAssets } from 'expo-av';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Speech from 'expo-speech';
 import { auth } from '../firebaseConfig';
@@ -28,7 +27,7 @@ interface VoiceAnalysis {
   earlyWarning: string;
 }
 
-const videos = {
+const VIDEO_SOURCES = {
   idle: require('./assets/avatar/idle_animation.mp4'),
   listening: require('./assets/avatar/listening.mp4'),
   speaking: require('./assets/avatar/speaking.mp4'),
@@ -59,14 +58,7 @@ export default function AvatarScreen() {
   }, [permission]);
 
   const getVideoSource = () => {
-    switch (avatarState) {
-      case 'listening':
-        return videos.listening;
-      case 'speaking':
-        return videos.speaking;
-      default:
-        return videos.idle;
-    }
+    return VIDEO_SOURCES[avatarState];
   };
 
   const handleStartListening = async () => {
@@ -223,8 +215,8 @@ export default function AvatarScreen() {
           {/* State Indicator */}
           <View style={styles.stateIndicator}>
             <Text style={styles.stateText}>
-              {avatarState === 'listening' ? '🎧 Listening...' : 
-               avatarState === 'speaking' ? '💬 Speaking...' : '👋 Hello!'}
+              {avatarState === 'listening' ? 'Listening...' : 
+               avatarState === 'speaking' ? 'Speaking...' : 'Hello!'}
             </Text>
           </View>
         </View>
@@ -256,7 +248,7 @@ export default function AvatarScreen() {
         </View>
 
         {/* Transcript Display */}
-        {transcript && (
+        {transcript ? (
           <View style={styles.transcriptContainer}>
             <View style={styles.sectionHeader}>
               <MaterialCommunityIcons name="text-to-speech" size={20} color="#00E0C6" />
@@ -264,10 +256,10 @@ export default function AvatarScreen() {
             </View>
             <Text style={styles.transcriptText}>{transcript}</Text>
           </View>
-        )}
+        ) : null}
 
         {/* AI Response */}
-        {showResponse && aiResponse && (
+        {showResponse && aiResponse ? (
           <View style={styles.responseContainer}>
             <View style={styles.sectionHeader}>
               <MaterialCommunityIcons name="brain" size={20} color="#9D4EDD" />
@@ -287,7 +279,7 @@ export default function AvatarScreen() {
             </View>
 
             {/* Suggestions */}
-            {aiResponse.suggestions && (
+            {aiResponse.suggestions ? (
               <View style={styles.suggestionCard}>
                 <View style={styles.suggestionHeader}>
                   <Ionicons name="bulb-outline" size={18} color="#F97316" />
@@ -295,10 +287,10 @@ export default function AvatarScreen() {
                 </View>
                 <Text style={styles.suggestionText}>{aiResponse.suggestions}</Text>
               </View>
-            )}
+            ) : null}
 
             {/* Early Warning */}
-            {aiResponse.earlyWarning && (
+            {aiResponse.earlyWarning ? (
               <View style={[styles.warningCard, { borderColor: getWarningColor(aiResponse.earlyWarning) }]}>
                 <View style={styles.warningHeader}>
                   <Ionicons name="warning-outline" size={18} color={getWarningColor(aiResponse.earlyWarning)} />
@@ -308,9 +300,9 @@ export default function AvatarScreen() {
                 </View>
                 <Text style={styles.warningText}>{aiResponse.earlyWarning}</Text>
               </View>
-            )}
+            ) : null}
           </View>
-        )}
+        ) : null}
 
         {/* Quick Access Buttons */}
         <Text style={styles.quickAccessTitle}>Quick Access</Text>
@@ -369,8 +361,6 @@ export default function AvatarScreen() {
     </View>
   );
 }
-
-const { width } = Dimensions.get('window');
 
 const styles = StyleSheet.create({
   container: {
