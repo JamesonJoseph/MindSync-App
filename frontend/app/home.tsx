@@ -180,6 +180,14 @@ export default function HomeScreen() {
             <Text style={styles.cardSubtitle}>Manage to-dos</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.gridCard} onPress={() => router.push('/avatar')}>
+            <View style={[styles.iconBox, { backgroundColor: '#DCFCE7' }]}>
+              <MaterialCommunityIcons name="account-voice" size={24} color="#22C55E" />
+            </View>
+            <Text style={styles.cardTitle}>AI Avatar</Text>
+            <Text style={styles.cardSubtitle}>Voice companion</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.gridCard}>
             <View style={[styles.iconBox, { backgroundColor: '#FFEDD5' }]}>
               <Ionicons name="calendar-outline" size={24} color="#F97316" />

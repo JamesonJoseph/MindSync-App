@@ -45,6 +45,10 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "assetBundlePatterns": [
+      "app/assets/avatar/*",
+      "assets/avatar/*"
+    ]
   }
 }

@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import re
+import aiohttp
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -514,6 +515,285 @@ async def chat_agent(request: Request):
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": "Chat completion failed"})
+
+
+# ==================== AVATAR VOICE ANALYSIS ====================
+
+ASSEMBLYAI_API_KEY = "7fc4c109e2b5443382238c7dac7dab73"
+CAMB_API_KEY = "1f5225f7-0bdb-45aa-b48d-994ea54ea892"
+DEFAULT_VOICE_ID = 147320
+
+
+@app.post("/api/avatar/analyze-voice")
+async def analyze_voice(
+    audio: UploadFile = File(...),
+    userId: str = Form(default=""),
+    userEmail: str = Form(default=""),
+):
+    """Analyze voice audio for tone, emotion, and provide suggestions."""
+    try:
+        audio_bytes = await audio.read()
+        
+        # Transcribe using AssemblyAI
+        import assemblyai as aai
+        
+        aai.settings.api_key = ASSEMBLYAI_API_KEY
+        transcriber = aai.Transcriber()
+        
+        # Save audio to temp file for transcription
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            transcript = transcriber.transcribe(tmp_path)
+            transcript_text = transcript.text if transcript.text else ""
+        finally:
+            os.unlink(tmp_path)
+        
+        if not transcript_text:
+            return {
+                "transcript": "",
+                "emotion": "neutral",
+                "confidence": 0,
+                "suggestions": "I couldn't hear what you said. Could you try again?",
+                "earlyWarning": ""
+            }
+        
+        # Get user context for analysis
+        user_context = await _get_user_context(userId)
+        
+        # Analyze tone and emotion using Groq
+        system_prompt = f"""You are MindSync AI, an empathetic voice assistant. Analyze the user's speech for:
+1. Emotional tone: happy, sad, angry, anxious, frustrated, excited, tired, neutral
+2. Confidence level (0-100)
+3. Suggestions to improve thought patterns (2-3 sentences, compassionate)
+4. Early warning flags if patterns suggest professional support may help
+
+IMPORTANT: Do NOT diagnose mental health conditions. Instead, suggest that "speaking with a professional might help" if concerning patterns are detected.
+
+User Context:
+- Name: {user_context.get('name', 'User')}
+- Occupation: {user_context.get('occupation', 'Not specified')}
+- Recent journal entries: {user_context.get('recent_journals', 'No recent entries')}
+
+Provide your response as JSON with keys: emotion, confidence, suggestions, earlyWarning.
+earlyWarning should be empty string if no concerns, otherwise a gentle suggestion to consider professional support."""
+
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Transcribed speech: {transcript_text}"}
+            ],
+            model="llama-3.1-8b-instant",
+            temperature=0.7,
+            max_tokens=500,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = chat_completion.choices[0].message.content if chat_completion.choices else ""
+        
+        try:
+            result = json.loads(result_text)
+        except json.JSONDecodeError:
+            result = {
+                "emotion": "neutral",
+                "confidence": 50,
+                "suggestions": result_text or "Thank you for sharing. I'm here to help.",
+                "earlyWarning": ""
+            }
+        
+        return {
+            "transcript": transcript_text,
+            "emotion": result.get("emotion", "neutral"),
+            "confidence": result.get("confidence", 0),
+            "suggestions": result.get("suggestions", ""),
+            "earlyWarning": result.get("earlyWarning", "")
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"Voice analysis failed: {str(e)}"})
+
+
+@app.post("/api/avatar/tts")
+async def text_to_speech(request: Request):
+    """Convert text to speech using Camb.ai API."""
+    try:
+        payload = await request.json()
+        text = payload.get("text", "")
+        voice_id = payload.get("voice_id", DEFAULT_VOICE_ID)
+        
+        if not text:
+            return JSONResponse(status_code=400, content={"error": "Text is required"})
+        
+        url = "https://client.camb.ai/apis/tts-stream"
+        
+        headers = {
+            "x-api-key": CAMB_API_KEY,
+            "Content-Type": "application/json",
+        }
+        
+        payload_tts = {
+            "text": text,
+            "voice_id": voice_id,
+            "language": "en-us",
+            "speech_model": "mars-flash",
+            "output_configuration": {"format": "wav"},
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload_tts) as resp:
+                if resp.status != 200:
+                    return JSONResponse(status_code=resp.status, content={"error": "TTS generation failed"})
+                
+                audio_data = b""
+                async for chunk in resp.content.iter_chunked(4096):
+                    audio_data += chunk
+                
+                import base64
+                audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+                
+                return {
+                    "audio": audio_base64,
+                    "format": "wav"
+                }
+                
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"TTS failed: {str(e)}"})
+
+
+@app.post("/api/avatar/early-warning")
+async def early_warning_analysis(request: Request):
+    """Analyze user patterns for early warning signs."""
+    try:
+        payload = await request.json()
+        user_id = payload.get("userId")
+        
+        if not user_id:
+            return JSONResponse(status_code=400, content={"error": "userId is required"})
+        
+        # Get user data
+        user_context = await _get_user_context(user_id)
+        
+        # Analyze patterns using Groq
+        system_prompt = """Analyze the user's recent patterns for early warning signs of mental health concerns.
+Consider: journal sentiment trends, task completion rates, sleep patterns, and voice analysis history.
+
+Provide a JSON response with:
+- level: "green", "yellow", "orange", or "red"
+- message: A brief, compassionate message (1-2 sentences)
+- recommendation: What the user should consider doing
+
+IMPORTANT: Do NOT diagnose conditions. Provide gentle, supportive guidance.
+If concerning patterns exist, suggest "speaking with a mental health professional might provide additional support."
+This is NOT a diagnosis - just a thoughtful suggestion based on patterns observed."""
+
+        user_data_summary = f"""User Profile:
+- Name: {user_context.get('name', 'User')}
+- Occupation: {user_context.get('occupation', 'Not specified')}
+- Sleep: {user_context.get('sleep', 'Not specified')}
+- Activity: {user_context.get('activity', 'Not specified')}
+
+Recent Journal Entries: {user_context.get('recent_journals', 'No entries')}
+
+Recent Tasks: {user_context.get('recent_tasks', 'No tasks')}"""
+
+        chat_completion = groq_client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_data_summary}
+            ],
+            model="llama-3.1-8b-instant",
+            temperature=0.5,
+            max_tokens=300,
+            response_format={"type": "json_object"}
+        )
+        
+        result_text = chat_completion.choices[0].message.content if chat_completion.choices else "{}"
+        
+        try:
+            result = json.loads(result_text)
+        except json.JSONDecodeError:
+            result = {
+                "level": "green",
+                "message": "You're doing great! Keep up the good work.",
+                "recommendation": "Continue your current practices."
+            }
+        
+        return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": f"Analysis failed: {str(e)}"})
+
+
+@app.get("/api/user/profile")
+async def get_user_profile(userId: str = Query(default="")):
+    """Get user profile data from onboarding."""
+    if not userId:
+        return JSONResponse(status_code=400, content={"error": "userId is required"})
+    
+    try:
+        user_context = await _get_user_context(userId)
+        return user_context
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to get profile: {str(e)}"})
+
+
+async def _get_user_context(user_id: str) -> dict:
+    """Get comprehensive user context for AI analysis."""
+    try:
+        journals, _, tasks = _get_collections()
+        
+        # Get recent journals
+        recent_journals = list(journals.find(
+            {"userId": user_id}
+        ).sort("date", DESCENDING).limit(5))
+        
+        journal_texts = []
+        for j in recent_journals:
+            title = j.get('title', '')
+            content = j.get('content', '')
+            if title or content:
+                journal_texts.append(f"- {title}: {content}"[:200])
+        
+        # Get recent tasks
+        recent_tasks = list(tasks.find(
+            {"userId": user_id}
+        ).sort("date", DESCENDING).limit(10))
+        
+        task_summary = []
+        for t in recent_tasks:
+            status = t.get('status', 'pending')
+            title = t.get('title', 'Untitled')
+            task_summary.append(f"- {title} ({status})")
+        
+        return {
+            "userId": user_id,
+            "name": "User",
+            "occupation": "Not specified",
+            "sleep": "Not specified",
+            "activity": "Not specified",
+            "recent_journals": "\n".join(journal_texts) if journal_texts else "No recent entries",
+            "recent_tasks": "\n".join(task_summary) if task_summary else "No recent tasks"
+        }
+    except Exception:
+        return {
+            "userId": user_id,
+            "name": "User",
+            "occupation": "Not specified",
+            "recent_journals": "Unable to retrieve",
+            "recent_tasks": "Unable to retrieve"
+        }
+
 
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=False)
