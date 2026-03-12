@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
-import API_BASE_URL from '../utils/api';
+import { getApiBaseUrl } from '../utils/api';
 
 type Task = {
   _id: string;
@@ -39,7 +39,7 @@ export default function TasksScreen() {
   const fetchTasks = async () => {
     if (!userId) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tasks?userId=${userId}`);
+      const res = await fetch(`${getApiBaseUrl()}/api/tasks?userId=${userId}`);
       if (res.ok) {
         const data = await res.json();
         setTasks(data);
@@ -54,7 +54,7 @@ export default function TasksScreen() {
   const handleAddTask = async () => {
     if (!newTaskTitle.trim() || !userId) return;
     try {
-      const res = await fetch(`${API_BASE_URL}/api/tasks`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, title: newTaskTitle.trim() }),
@@ -75,7 +75,7 @@ export default function TasksScreen() {
     setTasks(tasks.map(t => t._id === task._id ? { ...t, status: newStatus } : t));
     
     try {
-      await fetch(`${API_BASE_URL}/api/tasks/${task._id}`, {
+      await fetch(`${getApiBaseUrl()}/api/tasks/${task._id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
@@ -90,7 +90,7 @@ export default function TasksScreen() {
   const deleteTask = async (taskId: string) => {
     setTasks(tasks.filter(t => t._id !== taskId));
     try {
-      await fetch(`${API_BASE_URL}/api/tasks/${taskId}`, {
+      await fetch(`${getApiBaseUrl()}/api/tasks/${taskId}`, {
         method: 'DELETE',
       });
     } catch (error) {

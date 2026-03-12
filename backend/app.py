@@ -519,8 +519,8 @@ async def chat_agent(request: Request):
 
 # ==================== AVATAR VOICE ANALYSIS ====================
 
-ASSEMBLYAI_API_KEY = "7fc4c109e2b5443382238c7dac7dab73"
-CAMB_API_KEY = "1f5225f7-0bdb-45aa-b48d-994ea54ea892"
+ASSEMBLYAI_API_KEY = os.getenv("ASSEMBLYAI_API_KEY", "").strip()
+CAMB_API_KEY = os.getenv("CAMB_API_KEY", "").strip()
 DEFAULT_VOICE_ID = 147320
 
 

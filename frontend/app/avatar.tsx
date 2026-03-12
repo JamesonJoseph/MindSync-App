@@ -11,7 +11,7 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Video, ResizeMode, useAssets } from 'expo-av';
+import { Video, ResizeMode } from 'expo-av';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Speech from 'expo-speech';
 import { auth } from '../firebaseConfig';
@@ -251,7 +251,7 @@ export default function AvatarScreen() {
         {transcript ? (
           <View style={styles.transcriptContainer}>
             <View style={styles.sectionHeader}>
-              <MaterialCommunityIcons name="text-to-speech" size={20} color="#00E0C6" />
+              <MaterialCommunityIcons name="microphone-message" size={20} color="#00E0C6" />
               <Text style={styles.sectionTitle}>Your Words</Text>
             </View>
             <Text style={styles.transcriptText}>{transcript}</Text>

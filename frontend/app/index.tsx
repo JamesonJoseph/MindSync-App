@@ -22,21 +22,45 @@ import {
   signInWithCredential,
   onAuthStateChanged
 } from "firebase/auth";
-import { auth } from "../firebaseConfig"; // Assumes firebaseConfig.ts is in your root folder
+import { auth } from "../firebaseConfig";
 import * as Google from "expo-auth-session/providers/google";
 
+// =====================================================================
+// 🔴 🔴 🔴 PASTE YOUR WEB CLIENT ID RIGHT HERE 🔴 🔴 🔴
+// =====================================================================
+const GOOGLE_CLIENT_ID = "503344530777-kt0qsq41gk9og1nn0c5oskv20fmjj30h.apps.googleusercontent.com";
+
 export default function IndexScreen() {
-  const [currentSection, setCurrentSection] = useState("intro1");
-  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const router = useRouter();
 
-  // --- Auth States ---
+  // --- ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS ---
+  
+  // Auth & Navigation States
+  const [currentSection, setCurrentSection] = useState("intro1");
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  
+  // Auth Form States
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
+  
+  // Questionnaire States
+  const [dob, setDob] = useState("");
+  const [gender, setGender] = useState("");
+  const [occupation, setOccupation] = useState("");
+  const [sleep, setSleep] = useState("");
+  const [activity, setActivity] = useState("");
+  const [screenTime, setScreenTime] = useState("");
+  
+  // Google Auth
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
+    clientId: GOOGLE_CLIENT_ID, 
+  });
 
-  // --- CHECK PERSISTENT LOGIN ---
+  // --- EFFECTS ---
+  
+  // CHECK PERSISTENT LOGIN
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
@@ -47,32 +71,9 @@ export default function IndexScreen() {
       }
     });
     return unsubscribe;
-  }, []);
+  }, [router]);
 
-  if (isCheckingAuth) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
-        <ActivityIndicator size="large" color="#00b894" />
-      </View>
-    );
-  }
-
-  // --- Questionnaire States ---
-  const [dob, setDob] = useState("");
-  const [gender, setGender] = useState("");
-  const [occupation, setOccupation] = useState("");
-  const [sleep, setSleep] = useState("");
-  const [activity, setActivity] = useState("");
-  const [screenTime, setScreenTime] = useState("");
-
-  // =====================================================================
-  // 🔴 🔴 🔴 PASTE YOUR WEB CLIENT ID RIGHT HERE 🔴 🔴 🔴
-  // =====================================================================
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest({
-    clientId: "503344530777-kt0qsq41gk9og1nn0c5oskv20fmjj30h.apps.googleusercontent.com", 
-  });
-
-  // This "listens" for when the Google popup finishes
+  // Google Sign-In Response Handler
   useEffect(() => {
     if (response?.type === "success") {
       setAuthLoading(true);
@@ -91,9 +92,11 @@ export default function IndexScreen() {
           setAuthLoading(false);
         });
     }
-  }, [response]);
+  }, [response, router]);
 
-  // --- FIREBASE: SIGN UP (Email/Password) ---
+  // --- HANDLERS ---
+
+  // FIREBASE: SIGN UP (Email/Password)
   const handleSignUp = async () => {
     if (!email || !password) {
       Alert.alert("Missing Fields", "Please enter an email and password.");
@@ -111,10 +114,10 @@ export default function IndexScreen() {
     }
   };
 
-  // --- FIREBASE: LOGIN (Email/Password) ---
+  // FIREBASE: LOGIN (Email/Password)
   const handleLogin = async () => {
     if (!email || !password) {
-      Alert.alert("Missing Fields", "Please enter your email and password.");
+      Alert.alert("Missing Fields", "Please enter an email and password.");
       return;
     }
     setAuthLoading(true);
@@ -128,6 +131,8 @@ export default function IndexScreen() {
       setAuthLoading(false);
     }
   };
+
+  // --- RENDER HELPERS ---
 
   const renderChips = (options: string[], selectedValue: string, onSelect: (val: string) => void) => (
     <View style={styles.chipContainer}>
@@ -145,6 +150,17 @@ export default function IndexScreen() {
     </View>
   );
 
+  // --- CONDITIONAL RETURNS ---
+
+  if (isCheckingAuth) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
+        <ActivityIndicator size="large" color="#00b894" />
+      </View>
+    );
+  }
+
+  // --- MAIN RENDER ---
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
       <Stack.Screen options={{ headerShown: false }} />

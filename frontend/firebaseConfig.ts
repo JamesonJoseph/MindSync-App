@@ -1,7 +1,6 @@
 // firebaseConfig.ts
 import { initializeApp } from "firebase/app";
-import { getAuth, initializeAuth, getReactNativePersistence } from "firebase/auth";
-import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuth } from "firebase/auth";
 
 // Your friends' exact Firebase config
 const firebaseConfig = {
@@ -16,15 +15,4 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-let authInstance;
-try {
-  // Use ReactNativeAsyncStorage for persistence in React Native
-  authInstance = initializeAuth(app, {
-    persistence: getReactNativePersistence(ReactNativeAsyncStorage)
-  });
-} catch {
-  // Falls back when Auth is already initialized during Fast Refresh.
-  authInstance = getAuth(app);
-}
-
-export const auth = authInstance;
+export const auth = getAuth(app);
