@@ -71,7 +71,8 @@ export default function ChatScreen() {
       const apiUrl = getApiBaseUrl();
       console.log(`Sending chat to: ${apiUrl}/api/chat for user: ${userId}`);
 
-      const response = await fetch(`${apiUrl}/api/chat`, {
+      const { authFetch } = await import('../utils/api');
+      const response = await authFetch(`${apiUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

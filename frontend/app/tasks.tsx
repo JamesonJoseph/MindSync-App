@@ -39,7 +39,8 @@ export default function TasksScreen() {
   const fetchTasks = async () => {
     if (!userId) return;
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/tasks?userId=${userId}`);
+      const { authFetch } = await import('../utils/api');
+      const res = await authFetch(`${getApiBaseUrl()}/api/tasks?userId=${userId}`);
       if (res.ok) {
         const data = await res.json();
         setTasks(data);
@@ -54,7 +55,8 @@ export default function TasksScreen() {
   const handleAddTask = async () => {
     if (!newTaskTitle.trim() || !userId) return;
     try {
-      const res = await fetch(`${getApiBaseUrl()}/api/tasks`, {
+      const { authFetch } = await import('../utils/api');
+      const res = await authFetch(`${getApiBaseUrl()}/api/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, title: newTaskTitle.trim() }),
@@ -75,7 +77,8 @@ export default function TasksScreen() {
     setTasks(tasks.map(t => t._id === task._id ? { ...t, status: newStatus } : t));
     
     try {
-      await fetch(`${getApiBaseUrl()}/api/tasks/${task._id}`, {
+      const { authFetch } = await import('../utils/api');
+      await authFetch(`${getApiBaseUrl()}/api/tasks/${task._id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
@@ -90,7 +93,8 @@ export default function TasksScreen() {
   const deleteTask = async (taskId: string) => {
     setTasks(tasks.filter(t => t._id !== taskId));
     try {
-      await fetch(`${getApiBaseUrl()}/api/tasks/${taskId}`, {
+      const { authFetch } = await import('../utils/api');
+      await authFetch(`${getApiBaseUrl()}/api/tasks/${taskId}`, {
         method: 'DELETE',
       });
     } catch (error) {
