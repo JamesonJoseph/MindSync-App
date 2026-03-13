@@ -11,6 +11,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from groq import Groq
@@ -18,6 +19,8 @@ import httpx
 from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.errors import PyMongoError
 import uvicorn
+import firebase_admin
+from firebase_admin import auth as firebase_auth, credentials as firebase_credentials
 
 def _env_int(name: str, default: int) -> int:
     raw_value = os.getenv(name, "").strip()
@@ -51,6 +54,47 @@ _mongo_client: MongoClient | None = None
 _gemini_http_client: httpx.AsyncClient | None = None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 EMOTION_LABELS = {"happy", "sad", "angry", "surprise", "fear", "disgust", "neutral"}
+
+# Initialize Firebase Admin SDK (for verifying ID tokens)
+FIREBASE_ENABLED = False
+try:
+    if not firebase_admin._apps:
+        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        if cred_path:
+            cred = firebase_credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        else:
+            # Attempt default initialization (may work if running on GCP)
+            firebase_admin.initialize_app()
+    FIREBASE_ENABLED = True
+except Exception as exc:
+    print("[firebase] admin init failed:", exc)
+    FIREBASE_ENABLED = False
+
+
+async def _require_auth(request: Request) -> dict:
+    """Verify Firebase ID token from Authorization header and return {uid, email}.
+
+    Raises HTTPException(401) if token is missing/invalid or 500 if firebase not configured.
+    """
+    if not FIREBASE_ENABLED:
+        raise HTTPException(status_code=500, detail="Firebase admin not configured on server. Set GOOGLE_APPLICATION_CREDENTIALS or configure firebase admin.")
+
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
+
+    id_token = parts[1]
+    try:
+        decoded = firebase_auth.verify_id_token(id_token)
+        return {"uid": decoded.get("uid"), "email": decoded.get("email")}
+    except Exception as exc:
+        print("[firebase] token verify failed:", exc)
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 app = FastAPI()
 app.add_middleware(
@@ -128,7 +172,7 @@ def _get_mongo_client() -> MongoClient:
 
 def _get_collections():
     database = _get_mongo_client()[db_name]
-    return database["journals"], database["emotionhistories"], database["tasks"]
+    return database["journals"], database["emotionhistories"], database["tasks"], database["users"], database["voice_analyses"]
 
 def _get_gemini_http_client() -> httpx.AsyncClient:
     global _gemini_http_client
@@ -186,7 +230,7 @@ def health_check():
 @app.get("/api/journals")
 def get_journals(userId: str | None = None):
     if not userId: return []
-    journals, _, _ = _get_collections()
+    journals, _, _, _, _ = _get_collections()
     docs = list(journals.find({"userId": userId}).sort("date", DESCENDING))
     return [_serialize_doc(doc) for doc in docs]
 
@@ -201,7 +245,7 @@ def search_journals(
 ):
     try:
         query = _build_journal_query(user_id=userId, start_date=startDate, end_date=endDate, text_query=q)
-        journals, _, _ = _get_collections()
+        journals, _, _, _, _ = _get_collections()
         direction = ASCENDING if sort.lower() == "asc" else DESCENDING
         docs = list(journals.find(query).sort("date", direction).limit(limit))
         return [_serialize_doc(doc) for doc in docs]
@@ -210,7 +254,7 @@ def search_journals(
 
 @app.post("/api/journals")
 async def create_journal(request: Request):
-    journals, _, _ = _get_collections()
+    journals, _, _, _, _ = _get_collections()
     payload = await request.json()
     doc = {
         "userId": str(payload.get("userId", "")),
@@ -222,12 +266,15 @@ async def create_journal(request: Request):
         "aiAnalysis": payload.get("aiAnalysis", ""),
     }
     inserted = journals.insert_one(doc)
-    return JSONResponse(status_code=201, content=_serialize_doc(journals.find_one({"_id": inserted.inserted_id})))
+    created = journals.find_one({"_id": inserted.inserted_id})
+    if not created:
+        return JSONResponse(status_code=500, content={"error": "Failed to create journal"})
+    return JSONResponse(status_code=201, content=_serialize_doc(created))
 
 @app.delete("/api/journals/{journal_id}")
 def delete_journal(journal_id: str):
     try:
-        journals, _, _ = _get_collections()
+        journals, _, _, _, _ = _get_collections()
         oid = _parse_object_id(journal_id)
         result = journals.delete_one({"_id": oid})
         if result.deleted_count == 0:
@@ -239,7 +286,7 @@ def delete_journal(journal_id: str):
 @app.put("/api/journals/{journal_id}")
 async def update_journal(journal_id: str, request: Request):
     try:
-        journals, _, _ = _get_collections()
+        journals, _, _, _, _ = _get_collections()
         oid = _parse_object_id(journal_id)
         payload = await request.json()
         allowed_fields = {"userId", "userEmail", "title", "content", "date", "sentimentScore", "aiAnalysis"}
@@ -257,13 +304,13 @@ async def update_journal(journal_id: str, request: Request):
 @app.get("/api/tasks")
 def get_tasks(userId: str | None = None):
     if not userId: return []
-    _, _, tasks = _get_collections()
+    _, _, tasks, _, _ = _get_collections()
     docs = list(tasks.find({"userId": userId}).sort("date", DESCENDING))
     return [_serialize_doc(doc) for doc in docs]
 
 @app.post("/api/tasks")
 async def create_task(request: Request):
-    _, _, tasks = _get_collections()
+    _, _, tasks, _, _ = _get_collections()
     payload = await request.json()
     doc = {
         "userId": str(payload.get("userId", "")),
@@ -273,12 +320,15 @@ async def create_task(request: Request):
         "date": _utc_now(),
     }
     inserted = tasks.insert_one(doc)
-    return JSONResponse(status_code=201, content=_serialize_doc(tasks.find_one({"_id": inserted.inserted_id})))
+    created = tasks.find_one({"_id": inserted.inserted_id})
+    if not created:
+        return JSONResponse(status_code=500, content={"error": "Failed to create task"})
+    return JSONResponse(status_code=201, content=_serialize_doc(created))
 
 @app.put("/api/tasks/{task_id}")
 async def update_task(task_id: str, request: Request):
     try:
-        _, _, tasks = _get_collections()
+        _, _, tasks, _, _ = _get_collections()
         oid = _parse_object_id(task_id)
         payload = await request.json()
         allowed_fields = {"title", "description", "status"}
@@ -294,7 +344,7 @@ async def update_task(task_id: str, request: Request):
 @app.delete("/api/tasks/{task_id}")
 def delete_task(task_id: str):
     try:
-        _, _, tasks = _get_collections()
+        _, _, tasks, _, _ = _get_collections()
         oid = _parse_object_id(task_id)
         result = tasks.delete_one({"_id": oid})
         if result.deleted_count == 0:
@@ -342,7 +392,7 @@ async def detect_emotion(
         }
 
         try:
-            _, emotion_history, _ = _get_collections()
+            _, emotion_history, _, _, _ = _get_collections()
             emotion_history.insert_one(emotion_doc)
         except PyMongoError:
             pass 
@@ -460,7 +510,7 @@ async def chat_agent(request: Request):
                 "tool_calls": [t.model_dump() for t in tool_calls]
             })
 
-            journals, _, tasks = _get_collections()
+            journals, _, tasks, _, _ = _get_collections()
 
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
@@ -533,27 +583,30 @@ async def analyze_voice(
     """Analyze voice audio for tone, emotion, and provide suggestions."""
     try:
         audio_bytes = await audio.read()
-        
-        # Transcribe using AssemblyAI
+
         import assemblyai as aai
-        
-        aai.settings.api_key = ASSEMBLYAI_API_KEY
-        transcriber = aai.Transcriber()
-        
-        # Save audio to temp file for transcription
         import tempfile
         import os
-        
+
+        aai.settings.api_key = ASSEMBLYAI_API_KEY
+
+        tmp_path = None
         with tempfile.NamedTemporaryFile(delete=False, suffix='.m4a') as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
-        
+
         try:
-            transcript = transcriber.transcribe(tmp_path)
-            transcript_text = transcript.text if transcript.text else ""
+            config = aai.TranscriptionConfig(speech_models=["universal-2"])
+            transcriber = aai.Transcriber()
+            transcript = transcriber.transcribe(tmp_path, config=config)
+            transcript_text = transcript.text if getattr(transcript, 'text', None) else ""
         finally:
-            os.unlink(tmp_path)
-        
+            try:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except Exception:
+                pass
+
         if not transcript_text:
             return {
                 "transcript": "",
@@ -562,10 +615,10 @@ async def analyze_voice(
                 "suggestions": "I couldn't hear what you said. Could you try again?",
                 "earlyWarning": ""
             }
-        
+
         # Get user context for analysis
         user_context = await _get_user_context(userId)
-        
+
         # Analyze tone and emotion using Groq
         system_prompt = f"""You are MindSync AI, an empathetic voice assistant. Analyze the user's speech for:
 1. Emotional tone: happy, sad, angry, anxious, frustrated, excited, tired, neutral
@@ -580,8 +633,7 @@ User Context:
 - Occupation: {user_context.get('occupation', 'Not specified')}
 - Recent journal entries: {user_context.get('recent_journals', 'No recent entries')}
 
-Provide your response as JSON with keys: emotion, confidence, suggestions, earlyWarning.
-earlyWarning should be empty string if no concerns, otherwise a gentle suggestion to consider professional support."""
+Provide your response as JSON with keys: emotion, confidence, suggestions, earlyWarning."""
 
         chat_completion = groq_client.chat.completions.create(
             messages=[
@@ -593,9 +645,9 @@ earlyWarning should be empty string if no concerns, otherwise a gentle suggestio
             max_tokens=500,
             response_format={"type": "json_object"}
         )
-        
+
         result_text = chat_completion.choices[0].message.content if chat_completion.choices else ""
-        
+
         try:
             result = json.loads(result_text)
         except json.JSONDecodeError:
@@ -605,7 +657,24 @@ earlyWarning should be empty string if no concerns, otherwise a gentle suggestio
                 "suggestions": result_text or "Thank you for sharing. I'm here to help.",
                 "earlyWarning": ""
             }
-        
+
+        # persist voice analysis
+        try:
+            _, _, _, _, voice_analyses_col = _get_collections()
+            voice_doc = {
+                "userId": userId,
+                "userEmail": userEmail,
+                "transcript": transcript_text,
+                "emotion": result.get("emotion", "neutral"),
+                "confidence": int(result.get("confidence", 0) or 0),
+                "suggestions": result.get("suggestions", ""),
+                "earlyWarning": result.get("earlyWarning", ""),
+                "date": _utc_now(),
+            }
+            voice_analyses_col.insert_one(voice_doc)
+        except Exception:
+            pass
+
         return {
             "transcript": transcript_text,
             "emotion": result.get("emotion", "neutral"),
@@ -613,7 +682,6 @@ earlyWarning should be empty string if no concerns, otherwise a gentle suggestio
             "suggestions": result.get("suggestions", ""),
             "earlyWarning": result.get("earlyWarning", "")
         }
-        
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -751,8 +819,8 @@ async def get_user_profile(userId: str = Query(default="")):
 async def _get_user_context(user_id: str) -> dict:
     """Get comprehensive user context for AI analysis."""
     try:
-        journals, _, tasks = _get_collections()
-        
+        journals, _, tasks, users_col, voice_analyses_col = _get_collections()
+
         # Get recent journals
         recent_journals = list(journals.find(
             {"userId": user_id}
@@ -776,14 +844,29 @@ async def _get_user_context(user_id: str) -> dict:
             title = t.get('title', 'Untitled')
             task_summary.append(f"- {title} ({status})")
         
+        # attempt to read stored profile
+        stored_profile = users_col.find_one({"userId": user_id}) if users_col else None
+
+        profile_name = stored_profile.get('name') if stored_profile else None
+        occupation = stored_profile.get('occupation') if stored_profile else None
+        sleep = stored_profile.get('sleep') if stored_profile else None
+        activity = stored_profile.get('activity') if stored_profile else None
+
+        # recent voice analyses summary
+        recent_voice = list(voice_analyses_col.find({"userId": user_id}).sort("date", DESCENDING).limit(5)) if voice_analyses_col else []
+        voice_summary = []
+        for v in recent_voice:
+            voice_summary.append(f"- {v.get('emotion', 'neutral')} ({v.get('confidence', 0)}%)")
+
         return {
             "userId": user_id,
-            "name": "User",
-            "occupation": "Not specified",
-            "sleep": "Not specified",
-            "activity": "Not specified",
+            "name": profile_name or "User",
+            "occupation": occupation or "Not specified",
+            "sleep": sleep or "Not specified",
+            "activity": activity or "Not specified",
             "recent_journals": "\n".join(journal_texts) if journal_texts else "No recent entries",
-            "recent_tasks": "\n".join(task_summary) if task_summary else "No recent tasks"
+            "recent_tasks": "\n".join(task_summary) if task_summary else "No recent tasks",
+            "recent_voice": "\n".join(voice_summary) if voice_summary else "No recent voice analyses"
         }
     except Exception:
         return {

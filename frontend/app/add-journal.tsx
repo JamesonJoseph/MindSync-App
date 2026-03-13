@@ -86,7 +86,8 @@ export default function AddJournalScreen() {
       const endpoint = existingId ? `${apiUrl}/api/journals/${existingId}` : `${apiUrl}/api/journals`;
 
       // 2. Prepare payload including email and title
-      const response = await fetch(endpoint, {
+      const { authFetch } = await import('../utils/api');
+      const response = await authFetch(endpoint, {
         method: method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

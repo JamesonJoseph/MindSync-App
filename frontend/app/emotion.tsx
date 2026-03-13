@@ -74,7 +74,8 @@ export default function EmotionScreen() {
             formData.append('userId', user?.uid || "");
             formData.append('userEmail', user?.email || "");
 
-            const response = await fetch(`${apiUrl}/api/emotion`, {
+            const { authFetch } = await import('../utils/api');
+            const response = await authFetch(`${apiUrl}/api/emotion`, {
                 method: 'POST',
                 body: formData,
                 headers: { 'Accept': 'application/json' },

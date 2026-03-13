@@ -63,7 +63,8 @@ export default function JournalScreen() {
       }
 
       const apiUrl = getApiBaseUrl();
-      const response = await fetch(`${apiUrl}/api/journals?userId=${user.uid}`);
+      const { authFetch } = await import('../utils/api');
+      const response = await authFetch(`${apiUrl}/api/journals?userId=${user.uid}`);
       const data = await response.json();
       
       const formattedData = data.map((item: any) => {
@@ -98,7 +99,8 @@ export default function JournalScreen() {
         onPress: async () => {
           try {
             const apiUrl = getApiBaseUrl();
-            await fetch(`${apiUrl}/api/journals/${id}`, { method: "DELETE" });
+            const { authFetch } = await import('../utils/api');
+            await authFetch(`${apiUrl}/api/journals/${id}`, { method: "DELETE" });
             fetchJournals(); 
           } catch (error) {
             Alert.alert("Error", "Could not delete journal.");

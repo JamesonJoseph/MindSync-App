@@ -11,8 +11,7 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Video, ResizeMode } from 'expo-av';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Video, ResizeMode, Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { auth } from '../firebaseConfig';
 import { getApiBaseUrl } from '../utils/api';
@@ -43,29 +42,51 @@ export default function AvatarScreen() {
   const [transcript, setTranscript] = useState('');
   const [aiResponse, setAiResponse] = useState<VoiceAnalysis | null>(null);
   const [showResponse, setShowResponse] = useState(false);
+  const [micPermissionGranted, setMicPermissionGranted] = useState(false);
   
   const videoRef = useRef<Video>(null);
-  const cameraRef = useRef<CameraView>(null);
-  const [permission, requestPermission] = useCameraPermissions();
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   const userId = auth.currentUser?.uid || '';
   const userEmail = auth.currentUser?.email || '';
 
   useEffect(() => {
-    if (!permission?.granted) {
-      requestPermission();
+    checkMicrophonePermission();
+    return () => {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, []);
+
+  const checkMicrophonePermission = async () => {
+    try {
+      const { status } = await Audio.requestPermissionsAsync();
+      const granted = status === 'granted';
+      setMicPermissionGranted(granted);
+      console.log('[Audio] Microphone permission status:', status);
+    } catch (error) {
+      console.log('[Audio] Error checking permissions:', error);
     }
-  }, [permission]);
+  };
 
   const getVideoSource = () => {
     return VIDEO_SOURCES[avatarState];
   };
 
   const handleStartListening = async () => {
-    if (!permission?.granted) {
-      Alert.alert('Permission Required', 'Microphone permission is needed for voice interaction.');
-      requestPermission();
-      return;
+    console.log('[Audio] Starting listening...');
+    
+    if (!micPermissionGranted) {
+      console.log('[Audio] Requesting microphone permission...');
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Microphone permission is needed for voice interaction.');
+        setMicPermissionGranted(false);
+        return;
+      }
+      setMicPermissionGranted(true);
     }
 
     setIsListening(true);
@@ -75,38 +96,89 @@ export default function AvatarScreen() {
     setShowResponse(false);
 
     try {
-      if (cameraRef.current) {
-        const recording = await cameraRef.current.recordAsync({
-          maxDuration: 30,
-        });
+      console.log('[Audio] Setting audio mode...');
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
 
-        if (recording?.uri) {
-          await processVoiceRecording(recording.uri);
-        }
-      }
+      console.log('[Audio] Creating recording...');
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      
+      recordingRef.current = recording;
+      console.log('[Audio] Recording started successfully - tap stop when done');
+      
     } catch (error) {
-      console.log('Recording error:', error);
-      Alert.alert('Error', 'Failed to start recording. Please try again.');
-    } finally {
+      console.log('[Audio] Recording error:', error);
       setIsListening(false);
+      setAvatarState('idle');
+      Alert.alert('Error', 'Failed to start recording. Please try again.');
     }
   };
 
   const handleStopListening = async () => {
-    setIsListening(false);
-    if (cameraRef.current) {
-      cameraRef.current.stopRecording();
+    console.log('[Audio] Stopping listening...');
+    
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
     }
-  };
 
-  const processVoiceRecording = async (audioUri: string) => {
+    const recording = recordingRef.current;
+    
+    if (!recording) {
+      console.log('[Audio] No recording to stop');
+      setIsListening(false);
+      return;
+    }
+
+    setIsListening(false);
     setIsProcessing(true);
     setAvatarState('listening');
 
     try {
-      const filename = audioUri.split('/').pop() || 'audio.m4a';
-      const match = /\.(\w+)$/.exec(filename);
-      const type = match ? `audio/${match[1]}` : 'audio/m4a';
+      console.log('[Audio] Stopping recording and creating file...');
+      await recording.stopAndUnloadAsync();
+      
+      const uri = recording.getURI();
+      console.log('[Audio] Recording URI:', uri);
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+      });
+
+      if (uri) {
+        console.log('[Audio] Processing voice recording...');
+        await processVoiceRecording(uri);
+      } else {
+        console.log('[Audio] No URI from recording');
+        Alert.alert('Error', 'No audio recorded. Please try again.');
+        setAvatarState('idle');
+      }
+    } catch (error) {
+      console.log('[Audio] Error stopping recording:', error);
+      Alert.alert('Error', 'Failed to process recording. Please try again.');
+      setAvatarState('idle');
+    } finally {
+      recordingRef.current = null;
+      setIsProcessing(false);
+    }
+  };
+
+  const processVoiceRecording = async (audioUri: string) => {
+    console.log('[Audio] processVoiceRecording called with URI:', audioUri);
+    setIsProcessing(true);
+    setAvatarState('listening');
+
+    try {
+      const filename = 'recording.m4a';
+      const type = 'audio/m4a';
 
       const formData = new FormData();
       formData.append('audio', {
@@ -114,38 +186,77 @@ export default function AvatarScreen() {
         name: filename,
         type,
       } as any);
-      formData.append('userId', userId);
-      formData.append('userEmail', userEmail);
+      formData.append('userId', userId || 'anonymous');
+      formData.append('userEmail', userEmail || 'anonymous@example.com');
 
+      console.log('[Audio] Sending to backend...', { userId, userEmail });
       const apiUrl = getApiBaseUrl();
-      const response = await fetch(`${apiUrl}/api/avatar/analyze-voice`, {
-        method: 'POST',
-        body: formData,
-      });
+      console.log('[Audio] API URL:', apiUrl);
 
-      if (response.ok) {
-        const data: VoiceAnalysis = await response.json();
-        setTranscript(data.transcript || 'No speech detected');
-        setAiResponse(data);
-        setShowResponse(true);
-        
-        if (data.suggestions) {
-          setAvatarState('speaking');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+      try {
+        const response = await fetch(`${apiUrl}/api/avatar/analyze-voice`, {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+          },
+          body: formData,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+        console.log('[Audio] Response status:', response.status);
+
+        if (response.ok) {
+          const data: VoiceAnalysis = await response.json();
+          console.log('[Audio] Received response:', JSON.stringify(data));
           
-          await Speech.speak(data.suggestions, {
-            language: 'en-US',
-            pitch: 1.0,
-            rate: 0.9,
-          });
+          setTranscript(data.transcript || 'No speech detected');
+          setAiResponse(data);
+          setShowResponse(true);
           
+          if (data.suggestions) {
+            console.log('[Audio] Speaking response...');
+            setAvatarState('speaking');
+            
+            await Speech.speak(data.suggestions, {
+              language: 'en-US',
+              pitch: 1.0,
+              rate: 0.9,
+              voice: '147342',
+              onDone: () => {
+                console.log('[Audio] Speech completed');
+                setAvatarState('idle');
+              },
+              onError: (error) => {
+                console.log('[Audio] Speech error:', error);
+                setAvatarState('idle');
+              },
+            });
+          } else {
+            setAvatarState('idle');
+          }
+        } else {
+          console.log('[Audio] Server error:', response.status);
+          const errorText = await response.text();
+          console.log('[Audio] Server error response:', errorText);
+          Alert.alert('Error', 'Failed to analyze voice. Please try again.');
           setAvatarState('idle');
         }
-      } else {
-        Alert.alert('Error', 'Failed to analyze voice. Please try again.');
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        console.log('[Audio] Fetch error:', fetchError.message || fetchError);
+        if (fetchError.name === 'AbortError') {
+          Alert.alert('Timeout', 'The request took too long. Please try again.');
+        } else {
+          Alert.alert('Error', `Failed to connect: ${fetchError.message || 'Unknown error'}`);
+        }
         setAvatarState('idle');
       }
     } catch (error) {
-      console.log('Voice processing error:', error);
+      console.log('[Audio] Voice processing error:', error);
       Alert.alert('Error', 'Failed to process voice. Please try again.');
       setAvatarState('idle');
     } finally {
@@ -199,23 +310,12 @@ export default function AvatarScreen() {
             shouldPlay
             isMuted={false}
           />
-          
-          {/* Hidden Camera for Audio Recording */}
-          {isListening && permission?.granted && (
-            <View style={{ position: 'absolute', width: 1, height: 1, opacity: 0 }}>
-              <CameraView
-                ref={cameraRef}
-                style={{ flex: 1 }}
-                facing="front"
-                mode="video"
-              />
-            </View>
-          )}
 
           {/* State Indicator */}
           <View style={styles.stateIndicator}>
             <Text style={styles.stateText}>
-              {avatarState === 'listening' ? 'Listening...' : 
+              {isProcessing ? 'Processing...' : 
+               avatarState === 'listening' ? 'Listening...' : 
                avatarState === 'speaking' ? 'Speaking...' : 'Hello!'}
             </Text>
           </View>
