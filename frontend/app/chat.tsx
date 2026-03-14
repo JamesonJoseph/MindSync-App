@@ -12,6 +12,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
@@ -44,6 +45,10 @@ export default function ChatScreen() {
 
   const sendMessage = async () => {
     if (!inputText.trim()) return;
+    
+    const user = auth.currentUser;
+    const userId = user?.uid;
+    const userEmail = user?.email;
     
     if (!userId) {
       Alert.alert("Authentication Required", "Please log in to use the AI chat.");
@@ -81,15 +86,18 @@ export default function ChatScreen() {
         }),
       });
 
+      console.log(`Chat API response status: ${response.status}`);
+
       if (response.ok) {
         const data = await response.json();
+        console.log('Chat API response data:', data);
         setMessages(prev => [
           ...prev,
           { id: Date.now().toString(), role: 'assistant', content: data.content }
         ]);
       } else {
         const errData = await response.json().catch(() => ({}));
-        console.error("Chat API error response:", errData);
+        console.error("Chat API error response:", errData, "Status:", response.status);
         setMessages(prev => [
           ...prev,
           { id: Date.now().toString(), role: 'assistant', content: 'Sorry, I encountered an error connecting to my brain.' }
@@ -126,7 +134,7 @@ export default function ChatScreen() {
 
   return (
     <KeyboardAvoidingView 
-      style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]} 
+      style={[styles.container, { paddingTop: insets.top }]} 
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <View style={styles.header}>
@@ -166,6 +174,30 @@ export default function ChatScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Bottom Navigation */}
+      <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/home')}>
+          <Ionicons name="home-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Home</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/journal')}>
+          <Ionicons name="book-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Journal</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/avatar')}>
+          <MaterialCommunityIcons name="account-voice" size={26} color="#888" />
+          <Text style={styles.navText}>Avatar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/tasks')}>
+          <Ionicons name="checkbox-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Tasks</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem}>
+          <Ionicons name="documents-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Docs</Text>
+        </TouchableOpacity>
+      </View>
     </KeyboardAvoidingView>
   );
 }
@@ -196,6 +228,7 @@ const styles = StyleSheet.create({
   chatList: {
     paddingHorizontal: 15,
     paddingVertical: 20,
+    paddingBottom: 80,
   },
   messageWrapper: {
     flexDirection: 'row',
@@ -270,5 +303,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 10,
+  },
+  bottomNav: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    backgroundColor: '#fff',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+  },
+  navItem: {
+    alignItems: 'center',
+    flex: 1,
+  },
+  navText: {
+    fontSize: 12,
+    marginTop: 4,
+    color: '#888',
   },
 });

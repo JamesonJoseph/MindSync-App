@@ -13,6 +13,9 @@ import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { getApiBaseUrl } from '../utils/api';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const EMOTION_ANALYZED_KEY = 'mindSync_lastEmotionAnalysis';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -22,6 +25,7 @@ export default function HomeScreen() {
 
   const [secretPrompt, setSecretPrompt] = useState<string | null>(null);
   const [hasAnalyzed, setHasAnalyzed] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const userEmail = auth.currentUser?.email || '';
   const userId = auth.currentUser?.uid || '';
@@ -34,64 +38,92 @@ export default function HomeScreen() {
     }
   }, [permission]);
 
+  useEffect(() => {
+    checkAndRunAnalysis();
+  }, [permission]);
+
+  const checkAndRunAnalysis = async () => {
+    if (!permission?.granted || isAnalyzing || hasAnalyzed) return;
+
+    try {
+      const lastAnalyzed = await AsyncStorage.getItem(EMOTION_ANALYZED_KEY);
+      const today = new Date().toDateString();
+
+      if (lastAnalyzed === today) {
+        console.log('Emotion analysis already done today');
+        setHasAnalyzed(true);
+        return;
+      }
+
+      setIsAnalyzing(true);
+      await captureAndAnalyzeSecretly();
+      await AsyncStorage.setItem(EMOTION_ANALYZED_KEY, today);
+    } catch (error) {
+      console.log('Error checking analysis status:', error);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   const captureAndAnalyzeSecretly = async () => {
-    if (cameraRef.current && !hasAnalyzed) {
-      setHasAnalyzed(true);
-      try {
-        const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.1 });
-        if (photo && photo.uri) {
-          const filename = photo.uri.split('/').pop() || 'photo.jpg';
-          const match = /\.(\w+)$/.exec(filename);
-          const type = match ? `image/${match[1]}` : `image/jpeg`;
+    if (!cameraRef.current || isAnalyzing || hasAnalyzed) return;
+    
+    setHasAnalyzed(true);
+    setIsAnalyzing(true);
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.1 });
+      if (photo && photo.uri) {
+        const filename = photo.uri.split('/').pop() || 'photo.jpg';
+        const match = /\.(\w+)$/.exec(filename);
+        const type = match ? `image/${match[1]}` : 'image/jpeg';
 
-          const formData = new FormData();
-          formData.append('image', {
-            uri: photo.uri,
-            name: filename,
-            type,
-          } as any);
-          formData.append('userId', userId);
-          formData.append('userEmail', userEmail);
+        const formData = new FormData();
+        formData.append('image', {
+          uri: photo.uri,
+          name: filename,
+          type,
+        } as any);
+        formData.append('userId', userId);
+        formData.append('userEmail', userEmail);
 
-          const apiUrl = getApiBaseUrl();
-          const response = await fetch(`${apiUrl}/api/emotion`, {
-            method: 'POST',
-            body: formData,
-          });
+        const apiUrl = getApiBaseUrl();
+        const response = await fetch(`${apiUrl}/api/emotion`, {
+          method: 'POST',
+          body: formData,
+        });
 
-          if (response.ok) {
-            const data = await response.json();
-            const emotion = data.emotion;
-            const details = data.details || "I've analyzed your subtle facial cues.";
-            
-            // Show Popup Alert with details
-            Alert.alert(
-              `Mood Detected: ${emotion.toUpperCase()}`,
-              details,
-              [{ text: "OK" }]
-            );
+        if (response.ok) {
+          const data = await response.json();
+          const emotion = data.emotion;
+          const details = data.details || "I've analyzed your subtle facial cues.";
+          
+          Alert.alert(
+            `Mood Detected: ${emotion.toUpperCase()}`,
+            details,
+            [{ text: "OK" }]
+          );
 
-            // Secret prompt generation based on emotion
-            if (emotion === 'sad') {
-              setSecretPrompt("Hey, just a reminder to take a deep breath. You're doing great.");
-            } else if (emotion === 'angry') {
-              setSecretPrompt("It might be a good time for a short walk to clear your head.");
-            } else if (emotion === 'fear') {
-              setSecretPrompt("You are safe here. Take things one step at a time today.");
-            } else if (emotion === 'surprise') {
-              setSecretPrompt("Expect the unexpected today!");
-            } else if (emotion === 'disgust') {
-              setSecretPrompt("Focus on the positive things around you.");
-            } else if (emotion === 'happy') {
-              setSecretPrompt("Keep that great energy going today!");
-            } else {
-              setSecretPrompt("Have a peaceful and balanced day.");
-            }
+          if (emotion === 'sad') {
+            setSecretPrompt("Hey, just a reminder to take a deep breath. You're doing great.");
+          } else if (emotion === 'angry') {
+            setSecretPrompt("It might be a good time for a short walk to clear your head.");
+          } else if (emotion === 'fear') {
+            setSecretPrompt("You are safe here. Take things one step at a time today.");
+          } else if (emotion === 'surprise') {
+            setSecretPrompt("Expect the unexpected today!");
+          } else if (emotion === 'disgust') {
+            setSecretPrompt("Focus on the positive things around you.");
+          } else if (emotion === 'happy') {
+            setSecretPrompt("Keep that great energy going today!");
+          } else {
+            setSecretPrompt("Have a peaceful and balanced day.");
           }
         }
-      } catch (error) {
-        console.log("Secret capture failed", error);
       }
+    } catch (error) {
+      console.log("Secret capture failed", error);
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
@@ -104,10 +136,6 @@ export default function HomeScreen() {
             ref={cameraRef}
             style={{ flex: 1 }} 
             facing="front"
-            onCameraReady={() => {
-              // Wait 2 seconds for camera to focus and lighting to stabilize
-              setTimeout(captureAndAnalyzeSecretly, 2000);
-            }}
           />
         </View>
       )}
@@ -219,25 +247,25 @@ export default function HomeScreen() {
 
       {/* --- BOTTOM NAVIGATION --- */}
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 10) }]}>
-        <View style={styles.navItem}>
-          <Ionicons name="home" size={26} color="#00E0C6" />
-          <Text style={[styles.navText, { color: '#00E0C6', fontWeight: 'bold' }]}>Home</Text>
-        </View>
-        <TouchableOpacity style={styles.navItem}>
-          <MaterialCommunityIcons name="head-cog-outline" size={26} color="#888" />
-          <Text style={styles.navText}>Health</Text>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/home')}>
+          <Ionicons name="home-outline" size={26} color="#00E0C6" />
+          <Text style={[styles.navText, { color: '#00E0C6' }]}>Home</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/tasks' as any)}>
-          <MaterialCommunityIcons name="clipboard-check-outline" size={26} color="#888" />
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/journal')}>
+          <Ionicons name="book-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Journal</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/avatar')}>
+          <MaterialCommunityIcons name="account-voice" size={26} color="#888" />
+          <Text style={styles.navText}>Avatar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/tasks')}>
+          <Ionicons name="checkbox-outline" size={26} color="#888" />
           <Text style={styles.navText}>Tasks</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem}>
-          <MaterialCommunityIcons name="hand-coin-outline" size={26} color="#888" />
-          <Text style={styles.navText}>Budget</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem}>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/docs')}>
           <Ionicons name="documents-outline" size={26} color="#888" />
-          <Text style={styles.navText}>Document</Text>
+          <Text style={styles.navText}>Docs</Text>
         </TouchableOpacity>
       </View>
 

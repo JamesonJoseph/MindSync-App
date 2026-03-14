@@ -2,7 +2,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 
-// Your friends' exact Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyCdliv4S59iCknXSYsEy2L6F672RHixrBY",
   authDomain: "mindsync-a34e3.firebaseapp.com",
@@ -12,7 +11,6 @@ const firebaseConfig = {
   appId: "1:503344530777:web:a6d468aca0d498c6c0f848"
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);

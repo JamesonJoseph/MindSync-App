@@ -1,5 +1,10 @@
 import { Stack } from "expo-router";
+import { VaultProvider } from "./contexts/VaultContext";
 
 export default function RootLayout() {
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <VaultProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </VaultProvider>
+  );
 }
