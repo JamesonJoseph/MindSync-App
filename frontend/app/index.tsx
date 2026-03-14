@@ -9,7 +9,8 @@ import {
   Platform,
   Alert,
   ScrollView,
-  ActivityIndicator
+  ActivityIndicator,
+  Image
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, Stack } from "expo-router";
@@ -154,8 +155,15 @@ export default function IndexScreen() {
 
   if (isCheckingAuth) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f5f5' }}>
-        <ActivityIndicator size="large" color="#00b894" />
+      <View style={styles.splashContainer}>
+        <Image 
+          source={require('../assets/images/mindlogo.png')} 
+          style={styles.splashLogo}
+          resizeMode="contain"
+        />
+        <Text style={styles.splashTitle}>MindSync</Text>
+        <Text style={styles.splashTagline}>Your mental wellness companion</Text>
+        <ActivityIndicator size="large" color="#fff" style={{ marginTop: 40 }} />
       </View>
     );
   }
@@ -355,6 +363,27 @@ export default function IndexScreen() {
 }
 
 const styles = StyleSheet.create({
+  splashContainer: {
+    flex: 1,
+    backgroundColor: '#00E0C6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  splashLogo: {
+    width: 150,
+    height: 150,
+    marginBottom: 20,
+  },
+  splashTitle: {
+    fontSize: 36,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  splashTagline: {
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.8)',
+  },
   container: {
     flex: 1,
     backgroundColor: "#f5f5f5",

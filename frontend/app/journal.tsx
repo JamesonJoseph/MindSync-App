@@ -264,12 +264,26 @@ export default function JournalScreen() {
       </TouchableOpacity>
 
       <View style={[styles.bottomNav, { paddingBottom: Math.max(insets.bottom, 10) }]}>
-        {[{ name: "Home", lib: Ionicons, icon: "home-outline" }, { name: "Health", lib: MaterialCommunityIcons, icon: "head-cog-outline" }, { name: "Tasks", lib: MaterialCommunityIcons, icon: "clipboard-check-outline" }, { name: "Budget", lib: MaterialCommunityIcons, icon: "hand-coin-outline" }, { name: "Document", lib: Ionicons, icon: "documents-outline" }].map((item, index) => (
-          <View key={index} style={styles.navItem}>
-            <item.lib name={item.icon as any} size={26} color="#00E0C6" />
-            <Text style={styles.navText}>{item.name}</Text>
-          </View>
-        ))}
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/home')}>
+          <Ionicons name="home-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Home</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItemActive}>
+          <Ionicons name="book-outline" size={26} color="#00E0C6" />
+          <Text style={[styles.navText, { color: '#00E0C6' }]}>Journal</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/avatar')}>
+          <MaterialCommunityIcons name="account-voice" size={26} color="#888" />
+          <Text style={styles.navText}>Avatar</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/tasks')}>
+          <Ionicons name="checkbox-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Tasks</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/docs')}>
+          <Ionicons name="documents-outline" size={26} color="#888" />
+          <Text style={styles.navText}>Docs</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -300,7 +314,8 @@ const styles = StyleSheet.create({
   floatingButton: { position: "absolute", right: 25, backgroundColor: "#00b894", width: 60, height: 60, borderRadius: 30, justifyContent: "center", alignItems: "center", elevation: 8, zIndex: 10 },
   bottomNav: { position: "absolute", bottom: 0, left: 0, right: 0, flexDirection: "row", justifyContent: "space-around", backgroundColor: "#fff", paddingTop: 12, borderTopWidth: 1, borderTopColor: "#f0f0f0", shadowColor: "#000", shadowOffset: { width: 0, height: -2 }, shadowOpacity: 0.1, shadowRadius: 3, elevation: 10 },
   navItem: { alignItems: "center", flex: 1 },
-  navText: { fontSize: 12, marginTop: 4, color: "#00E0C6", fontWeight: "500" },
+  navItemActive: { alignItems: "center", flex: 1 },
+  navText: { fontSize: 12, marginTop: 4, color: "#888" },
   consistencyContainer: { marginTop: 10, backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 10, elevation: 4 },
   consistencyTitle: { fontSize: 18, fontWeight: "700", color: "#333" },
   consistencySubtitle: { fontSize: 14, color: "#888", marginBottom: 15 },

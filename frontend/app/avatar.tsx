@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,8 @@ import {
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { Video, ResizeMode, Audio } from 'expo-av';
+
+import { useAudioRecorder, RecordingPresets, useAudioRecorderState, requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
 import * as Speech from 'expo-speech';
 import { auth } from '../firebaseConfig';
 import { getApiBaseUrl } from '../utils/api';
@@ -26,12 +27,6 @@ interface VoiceAnalysis {
   earlyWarning: string;
 }
 
-const VIDEO_SOURCES = {
-  idle: require('./assets/avatar/idle_animation.mp4'),
-  listening: require('./assets/avatar/listening.mp4'),
-  speaking: require('./assets/avatar/speaking.mp4'),
-};
-
 export default function AvatarScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -43,10 +38,24 @@ export default function AvatarScreen() {
   const [aiResponse, setAiResponse] = useState<VoiceAnalysis | null>(null);
   const [showResponse, setShowResponse] = useState(false);
   const [micPermissionGranted, setMicPermissionGranted] = useState(false);
+  const [recordingUri, setRecordingUri] = useState<string | null>(null);
   
-  const videoRef = useRef<Video>(null);
-  const recordingRef = useRef<Audio.Recording | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
+  // Get avatar emoji based on state
+  const getAvatarEmoji = () => {
+    switch (avatarState) {
+      case 'listening':
+        return '👂';
+      case 'speaking':
+        return '🗣️';
+      default:
+        return '🤖';
+    }
+  };
+
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder);
   
   const userId = auth.currentUser?.uid || '';
   const userEmail = auth.currentUser?.email || '';
@@ -60,9 +69,15 @@ export default function AvatarScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (recorderState?.isRecording) {
+      setRecordingUri(audioRecorder.uri);
+    }
+  }, [recorderState, audioRecorder.uri]);
+
   const checkMicrophonePermission = async () => {
     try {
-      const { status } = await Audio.requestPermissionsAsync();
+      const { status } = await requestRecordingPermissionsAsync();
       const granted = status === 'granted';
       setMicPermissionGranted(granted);
       console.log('[Audio] Microphone permission status:', status);
@@ -71,16 +86,12 @@ export default function AvatarScreen() {
     }
   };
 
-  const getVideoSource = () => {
-    return VIDEO_SOURCES[avatarState];
-  };
-
   const handleStartListening = async () => {
     console.log('[Audio] Starting listening...');
     
     if (!micPermissionGranted) {
       console.log('[Audio] Requesting microphone permission...');
-      const { status } = await Audio.requestPermissionsAsync();
+      const { status } = await requestRecordingPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Permission Required', 'Microphone permission is needed for voice interaction.');
         setMicPermissionGranted(false);
@@ -94,23 +105,20 @@ export default function AvatarScreen() {
     setTranscript('');
     setAiResponse(null);
     setShowResponse(false);
+    setRecordingUri(null);
 
     try {
       console.log('[Audio] Setting audio mode...');
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldDuckAndroid: true,
-        playThroughEarpieceAndroid: false,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
-      console.log('[Audio] Creating recording...');
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      console.log('[Audio] Preparing recording...');
+      await audioRecorder.prepareToRecordAsync();
       
-      recordingRef.current = recording;
+      console.log('[Audio] Starting recording...');
+      audioRecorder.record();
       console.log('[Audio] Recording started successfully - tap stop when done');
       
     } catch (error) {
@@ -129,9 +137,7 @@ export default function AvatarScreen() {
       recordingTimerRef.current = null;
     }
 
-    const recording = recordingRef.current;
-    
-    if (!recording) {
+    if (!audioRecorder || !recorderState?.isRecording) {
       console.log('[Audio] No recording to stop');
       setIsListening(false);
       return;
@@ -142,15 +148,14 @@ export default function AvatarScreen() {
     setAvatarState('listening');
 
     try {
-      console.log('[Audio] Stopping recording and creating file...');
-      await recording.stopAndUnloadAsync();
+      console.log('[Audio] Stopping recording...');
+      await audioRecorder.stop();
       
-      const uri = recording.getURI();
+      const uri = audioRecorder.uri;
       console.log('[Audio] Recording URI:', uri);
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: false,
       });
 
       if (uri) {
@@ -166,7 +171,6 @@ export default function AvatarScreen() {
       Alert.alert('Error', 'Failed to process recording. Please try again.');
       setAvatarState('idle');
     } finally {
-      recordingRef.current = null;
       setIsProcessing(false);
     }
   };
@@ -242,7 +246,14 @@ export default function AvatarScreen() {
           console.log('[Audio] Server error:', response.status);
           const errorText = await response.text();
           console.log('[Audio] Server error response:', errorText);
-          Alert.alert('Error', 'Failed to analyze voice. Please try again.');
+          let errorMessage = 'Failed to analyze voice. Please try again.';
+          try {
+            const errorData = JSON.parse(errorText);
+            if (errorData.detail) {
+              errorMessage = errorData.detail;
+            }
+          } catch {}
+          Alert.alert('Error', errorMessage);
           setAvatarState('idle');
         }
       } catch (fetchError: any) {
@@ -299,17 +310,11 @@ export default function AvatarScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Avatar Video Container */}
+        {/* Avatar Container */}
         <View style={styles.avatarContainer}>
-          <Video
-            ref={videoRef}
-            source={getVideoSource()}
-            style={styles.avatarVideo}
-            resizeMode={ResizeMode.COVER}
-            isLooping
-            shouldPlay
-            isMuted={false}
-          />
+          <View style={styles.avatarEmojiContainer}>
+            <Text style={styles.avatarEmoji}>{getAvatarEmoji()}</Text>
+          </View>
 
           {/* State Indicator */}
           <View style={styles.stateIndicator}>
@@ -453,7 +458,7 @@ export default function AvatarScreen() {
           <Ionicons name="checkbox-outline" size={26} color="#888" />
           <Text style={styles.navText}>Tasks</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem}>
+        <TouchableOpacity style={styles.navItem} onPress={() => router.push('/docs')}>
           <Ionicons name="documents-outline" size={26} color="#888" />
           <Text style={styles.navText}>Docs</Text>
         </TouchableOpacity>
@@ -493,10 +498,15 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: '#E0F7F4',
     position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  avatarVideo: {
-    width: '100%',
-    height: '100%',
+  avatarEmojiContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarEmoji: {
+    fontSize: 140,
   },
   stateIndicator: {
     position: 'absolute',

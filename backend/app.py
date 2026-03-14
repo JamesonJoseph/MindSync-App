@@ -10,7 +10,6 @@ from urllib.parse import urlparse
 from bson import ObjectId
 from bson.errors import InvalidId
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -59,7 +58,9 @@ EMOTION_LABELS = {"happy", "sad", "angry", "surprise", "fear", "disgust", "neutr
 FIREBASE_ENABLED = False
 try:
     if not firebase_admin._apps:
-        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+        # Use local service account file if exists, otherwise check env var
+        local_cred_path = os.path.join(os.path.dirname(__file__), "mindsync-a34e3-firebase-adminsdk-fbsvc-3222146bdc.json")
+        cred_path = local_cred_path if os.path.exists(local_cred_path) else os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
         if cred_path:
             cred = firebase_credentials.Certificate(cred_path)
             firebase_admin.initialize_app(cred)
@@ -228,15 +229,16 @@ def health_check():
 # ==================== JOURNALS ====================
 
 @app.get("/api/journals")
-def get_journals(userId: str | None = None):
-    if not userId: return []
+async def get_journals(request: Request):
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
     journals, _, _, _, _ = _get_collections()
-    docs = list(journals.find({"userId": userId}).sort("date", DESCENDING))
+    docs = list(journals.find({"userId": uid}).sort("date", DESCENDING))
     return [_serialize_doc(doc) for doc in docs]
 
 @app.get("/api/journals/search")
-def search_journals(
-    userId: str,
+async def search_journals(
+    request: Request,
     startDate: str | None = None,
     endDate: str | None = None,
     q: str | None = None,
@@ -244,21 +246,26 @@ def search_journals(
     sort: str = "desc",
 ):
     try:
-        query = _build_journal_query(user_id=userId, start_date=startDate, end_date=endDate, text_query=q)
+        auth_info = await _require_auth(request)
+        uid = auth_info.get("uid")
+        query = _build_journal_query(user_id=uid, start_date=startDate, end_date=endDate, text_query=q)
         journals, _, _, _, _ = _get_collections()
         direction = ASCENDING if sort.lower() == "asc" else DESCENDING
         docs = list(journals.find(query).sort("date", direction).limit(limit))
         return [_serialize_doc(doc) for doc in docs]
+    except HTTPException:
+        raise
     except Exception:
         return JSONResponse(status_code=500, content={"error": "Failed to fetch journals"})
 
 @app.post("/api/journals")
 async def create_journal(request: Request):
     journals, _, _, _, _ = _get_collections()
+    auth_info = await _require_auth(request)
     payload = await request.json()
     doc = {
-        "userId": str(payload.get("userId", "")),
-        "userEmail": str(payload.get("userEmail", "")),
+        "userId": str(auth_info.get("uid") or ""),
+        "userEmail": str(auth_info.get("email") or ""),
         "title": str(payload.get("title", "Untitled Entry")),
         "content": str(payload.get("content", "")),
         "date": _utc_now(),
@@ -272,48 +279,63 @@ async def create_journal(request: Request):
     return JSONResponse(status_code=201, content=_serialize_doc(created))
 
 @app.delete("/api/journals/{journal_id}")
-def delete_journal(journal_id: str):
+async def delete_journal(journal_id: str, request: Request):
     try:
+        auth_info = await _require_auth(request)
+        uid = auth_info.get("uid")
         journals, _, _, _, _ = _get_collections()
         oid = _parse_object_id(journal_id)
-        result = journals.delete_one({"_id": oid})
+        result = journals.delete_one({"_id": oid, "userId": uid})
         if result.deleted_count == 0:
             return JSONResponse(status_code=404, content={"error": "Journal not found"})
         return {"message": "Journal deleted successfully"}
+    except HTTPException:
+        raise
     except Exception:
         return JSONResponse(status_code=500, content={"error": "Failed to delete journal"})
 
 @app.put("/api/journals/{journal_id}")
 async def update_journal(journal_id: str, request: Request):
     try:
+        auth_info = await _require_auth(request)
+        uid = auth_info.get("uid")
         journals, _, _, _, _ = _get_collections()
         oid = _parse_object_id(journal_id)
         payload = await request.json()
-        allowed_fields = {"userId", "userEmail", "title", "content", "date", "sentimentScore", "aiAnalysis"}
+        allowed_fields = {"title", "content", "date", "sentimentScore", "aiAnalysis"}
         updates = {k: v for k, v in payload.items() if k in allowed_fields}
         if not updates:
             return JSONResponse(status_code=400, content={"error": "No valid fields to update"})
-        journals.update_one({"_id": oid}, {"$set": updates})
+        result = journals.update_one({"_id": oid, "userId": uid}, {"$set": updates})
+        if result.matched_count == 0:
+            return JSONResponse(status_code=404, content={"error": "Journal not found"})
         updated = journals.find_one({"_id": oid})
         return _serialize_doc(updated)
+    except HTTPException:
+        raise
     except Exception:
         return JSONResponse(status_code=500, content={"error": "Failed to update journal"})
 
 # ==================== TASKS ====================
 
 @app.get("/api/tasks")
-def get_tasks(userId: str | None = None):
-    if not userId: return []
+async def get_tasks(request: Request):
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
     _, _, tasks, _, _ = _get_collections()
-    docs = list(tasks.find({"userId": userId}).sort("date", DESCENDING))
+    docs = list(tasks.find({"userId": uid}).sort("date", DESCENDING))
     return [_serialize_doc(doc) for doc in docs]
 
 @app.post("/api/tasks")
 async def create_task(request: Request):
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
+    email = auth_info.get("email")
     _, _, tasks, _, _ = _get_collections()
     payload = await request.json()
     doc = {
-        "userId": str(payload.get("userId", "")),
+        "userId": str(uid or ""),
+        "userEmail": str(email or ""),
         "title": str(payload.get("title", "Untitled Task")),
         "description": str(payload.get("description", "")),
         "status": str(payload.get("status", "pending")),
@@ -328,6 +350,8 @@ async def create_task(request: Request):
 @app.put("/api/tasks/{task_id}")
 async def update_task(task_id: str, request: Request):
     try:
+        auth_info = await _require_auth(request)
+        uid = auth_info.get("uid")
         _, _, tasks, _, _ = _get_collections()
         oid = _parse_object_id(task_id)
         payload = await request.json()
@@ -335,21 +359,29 @@ async def update_task(task_id: str, request: Request):
         updates = {k: v for k, v in payload.items() if k in allowed_fields}
         if not updates:
             return JSONResponse(status_code=400, content={"error": "No valid fields to update"})
-        tasks.update_one({"_id": oid}, {"$set": updates})
+        result = tasks.update_one({"_id": oid, "userId": uid}, {"$set": updates})
+        if result.matched_count == 0:
+            return JSONResponse(status_code=404, content={"error": "Task not found"})
         updated = tasks.find_one({"_id": oid})
         return _serialize_doc(updated)
+    except HTTPException:
+        raise
     except Exception:
         return JSONResponse(status_code=500, content={"error": "Failed to update task"})
 
 @app.delete("/api/tasks/{task_id}")
-def delete_task(task_id: str):
+async def delete_task(task_id: str, request: Request):
     try:
+        auth_info = await _require_auth(request)
+        uid = auth_info.get("uid")
         _, _, tasks, _, _ = _get_collections()
         oid = _parse_object_id(task_id)
-        result = tasks.delete_one({"_id": oid})
+        result = tasks.delete_one({"_id": oid, "userId": uid})
         if result.deleted_count == 0:
             return JSONResponse(status_code=404, content={"error": "Task not found"})
         return {"message": "Task deleted successfully"}
+    except HTTPException:
+        raise
     except Exception:
         return JSONResponse(status_code=500, content={"error": "Failed to delete task"})
 
@@ -371,10 +403,12 @@ async def analyze_journal(request: Request):
 
 @app.post("/api/emotion")
 async def detect_emotion(
+    request: Request,
     image: UploadFile = File(...),
-    userId: str = Form(default=""),
-    userEmail: str = Form(default=""),
 ):
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
+    email = auth_info.get("email")
     try:
         image_bytes = await image.read()
         base64_img = base64.b64encode(image_bytes).decode("utf-8")
@@ -383,8 +417,8 @@ async def detect_emotion(
         emotion_data = await _analyze_with_gemini(base64_img, mime_type)
 
         emotion_doc = {
-            "userId": userId,
-            "userEmail": userEmail,
+            "userId": str(uid or ""),
+            "userEmail": str(email or ""),
             "emotion": emotion_data["emotion"],
             "confidence": emotion_data["confidence"],
             "details": emotion_data["details"],
@@ -416,12 +450,12 @@ async def chat_agent(request: Request):
     if not groq_client:
         return JSONResponse(status_code=500, content={"error": "Groq client not configured"})
 
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
+    email = auth_info.get("email")
+    
     payload = await request.json()
-    user_id = payload.get("userId")
     messages = payload.get("messages", [])
-
-    if not user_id:
-        return JSONResponse(status_code=400, content={"error": "userId is required"})
 
     # Define tools
     tools = [
@@ -519,11 +553,12 @@ async def chat_agent(request: Request):
                 tool_response = ""
 
                 if function_name == "get_tasks":
-                    docs = list(tasks.find({"userId": user_id}).sort("date", DESCENDING).limit(10))
+                    docs = list(tasks.find({"userId": uid}).sort("date", DESCENDING).limit(10))
                     tool_response = json.dumps([_serialize_doc(d) for d in docs])
                 elif function_name == "create_task":
                     doc = {
-                        "userId": user_id,
+                        "userId": str(uid or ""),
+                        "userEmail": str(email or ""),
                         "title": function_args.get("title", "Untitled Task"),
                         "description": function_args.get("description", ""),
                         "status": function_args.get("status", "pending"),
@@ -534,12 +569,12 @@ async def chat_agent(request: Request):
                 elif function_name == "update_task":
                     try:
                         oid = _parse_object_id(function_args.get("task_id"))
-                        tasks.update_one({"_id": oid}, {"$set": {"status": function_args.get("status")}})
+                        tasks.update_one({"_id": oid, "userId": uid}, {"$set": {"status": function_args.get("status")}})
                         tool_response = json.dumps({"status": "success"})
                     except:
                         tool_response = json.dumps({"status": "error", "message": "Invalid task ID"})
                 elif function_name == "get_journals":
-                    docs = list(journals.find({"userId": user_id}).sort("date", DESCENDING).limit(5))
+                    docs = list(journals.find({"userId": uid}).sort("date", DESCENDING).limit(5))
                     tool_response = json.dumps([_serialize_doc(d) for d in docs])
                 else:
                     tool_response = json.dumps({"error": "Unknown function"})
@@ -576,11 +611,20 @@ DEFAULT_VOICE_ID = 147320
 
 @app.post("/api/avatar/analyze-voice")
 async def analyze_voice(
+    request: Request,
     audio: UploadFile = File(...),
-    userId: str = Form(default=""),
-    userEmail: str = Form(default=""),
 ):
     """Analyze voice audio for tone, emotion, and provide suggestions."""
+    # Try to get auth info, but don't fail if Firebase is not configured
+    try:
+        auth_info = await _require_auth(request)
+        uid = auth_info.get("uid")
+        email = auth_info.get("email")
+    except Exception:
+        # If Firebase auth fails, use anonymous user
+        uid = "anonymous"
+        email = "anonymous@example.com"
+    
     try:
         audio_bytes = await audio.read()
 
@@ -617,7 +661,7 @@ async def analyze_voice(
             }
 
         # Get user context for analysis
-        user_context = await _get_user_context(userId)
+        user_context = await _get_user_context(uid)
 
         # Analyze tone and emotion using Groq
         system_prompt = f"""You are MindSync AI, an empathetic voice assistant. Analyze the user's speech for:
@@ -662,8 +706,8 @@ Provide your response as JSON with keys: emotion, confidence, suggestions, early
         try:
             _, _, _, _, voice_analyses_col = _get_collections()
             voice_doc = {
-                "userId": userId,
-                "userEmail": userEmail,
+                "userId": str(uid or ""),
+                "userEmail": str(email or ""),
                 "transcript": transcript_text,
                 "emotion": result.get("emotion", "neutral"),
                 "confidence": int(result.get("confidence", 0) or 0),
@@ -804,16 +848,48 @@ Recent Tasks: {user_context.get('recent_tasks', 'No tasks')}"""
 
 
 @app.get("/api/user/profile")
-async def get_user_profile(userId: str = Query(default="")):
+async def get_user_profile(request: Request):
     """Get user profile data from onboarding."""
-    if not userId:
-        return JSONResponse(status_code=400, content={"error": "userId is required"})
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
     
     try:
-        user_context = await _get_user_context(userId)
+        user_context = await _get_user_context(uid)
         return user_context
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": f"Failed to get profile: {str(e)}"})
+
+
+@app.put("/api/user/profile")
+async def update_user_profile(request: Request):
+    """Update user profile data."""
+    auth_info = await _require_auth(request)
+    uid = auth_info.get("uid")
+    email = auth_info.get("email")
+    
+    try:
+        payload = await request.json()
+        _, _, _, users_col, _ = _get_collections()
+        
+        profile_data = {
+            "userId": str(uid or ""),
+            "userEmail": str(email or ""),
+            "name": str(payload.get("name", "")),
+            "occupation": str(payload.get("occupation", "")),
+            "sleep": str(payload.get("sleep", "")),
+            "activity": str(payload.get("activity", "")),
+            "updatedAt": _utc_now(),
+        }
+        
+        users_col.update_one(
+            {"userId": str(uid or "")},
+            {"$set": profile_data},
+            upsert=True
+        )
+        
+        return {"message": "Profile updated successfully", "profile": profile_data}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": f"Failed to update profile: {str(e)}"})
 
 
 async def _get_user_context(user_id: str) -> dict:
