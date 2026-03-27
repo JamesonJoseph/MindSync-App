@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
 import { getApiBaseUrl, authFetch } from '../utils/api';
-import { toISTISOString } from '../utils/timezone';
+import { toISTISOString, getISTDateKeyFromDate } from '../utils/timezone';
 import { requestNotificationPermissions, scheduleTaskReminder, scheduleEventReminder, scheduleBirthdayReminder } from '../utils/notifications';
 
 // Types
@@ -116,7 +116,7 @@ export default function TaskManagerScreen() {
     setFormTitle('');
     setFormAllDay(true);
     const today = new Date();
-    setFormDate(today.toISOString().split('T')[0]);
+    setFormDate(getISTDateKeyFromDate(today));
     setFormTime('');
     setFormReminder(30);
     setShowFormModal(true);
@@ -129,8 +129,17 @@ export default function TaskManagerScreen() {
     setFormTitle(task.title);
     setFormAllDay(task.allDay);
     const eventDate = new Date(task.event_datetime);
-    setFormDate(eventDate.toISOString().split('T')[0]);
-    setFormTime(task.allDay ? '' : eventDate.toTimeString().slice(0, 5));
+    setFormDate(getISTDateKeyFromDate(eventDate));
+    setFormTime(
+      task.allDay
+        ? ''
+        : eventDate.toLocaleTimeString('en-GB', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          })
+    );
     setFormReminder(task.reminder_minutes);
     setShowFormModal(true);
   };

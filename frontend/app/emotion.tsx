@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { auth } from '../firebaseConfig'; 
-import { getApiBaseUrl } from '../utils/api';
+import { getApiBaseUrl, parseApiResponse } from '../utils/api';
 
 interface EmotionResult {
     emotion: string;
@@ -81,9 +81,12 @@ export default function EmotionScreen() {
                 headers: { 'Accept': 'application/json' },
             });
 
-            const textResponse = await response.text();
-            const data = JSON.parse(textResponse);
-            if (!response.ok) throw new Error(data.error);
+            const data: any = await parseApiResponse<any>(response);
+            if (!response.ok) {
+                throw new Error(
+                    typeof data?.error === 'string' ? data.error : 'Emotion analysis failed.'
+                );
+            }
 
             setResult(data);
         } catch (err: any) { setError(err.message || 'Connection failed.'); }

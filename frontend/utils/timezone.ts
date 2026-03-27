@@ -2,6 +2,7 @@
 // IST is UTC+5:30
 
 const IST_OFFSET = 5.5 * 60 * 60 * 1000; // 5 hours 30 minutes in milliseconds
+const IST_TIME_ZONE = 'Asia/Kolkata';
 
 /**
  * Get current date/time in IST
@@ -18,7 +19,7 @@ export function getISTNow(): Date {
 export function formatISTDate(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
+    timeZone: IST_TIME_ZONE,
     weekday: 'short',
     year: 'numeric',
     month: 'short',
@@ -32,7 +33,7 @@ export function formatISTDate(date: Date | string): string {
 export function formatISTTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
+    timeZone: IST_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
     hour12: true,
@@ -145,7 +146,7 @@ export function toISTISOString(dateStr: string, timeStr?: string): string {
  */
 export function formatDateIST(date: Date): string {
   return date.toLocaleDateString('en-IN', {
-    timeZone: 'Asia/Kolkata',
+    timeZone: IST_TIME_ZONE,
     weekday: 'short',
     month: 'short',
     day: 'numeric',
@@ -160,8 +161,8 @@ export function isTodayIST(date: Date | string): boolean {
   const d = typeof date === 'string' ? new Date(date) : date;
   const todayIST = getISTNow();
   
-  return d.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) === 
-         todayIST.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+  return d.toLocaleDateString('en-IN', { timeZone: IST_TIME_ZONE }) === 
+         todayIST.toLocaleDateString('en-IN', { timeZone: IST_TIME_ZONE });
 }
 
 /**
@@ -171,4 +172,26 @@ export function fromISOToIST(isoString: string): Date {
   const date = new Date(isoString);
   const utc = date.getTime() + date.getTimezoneOffset() * 60000;
   return new Date(utc + IST_OFFSET);
+}
+
+/**
+ * Build YYYY-MM-DD date key in IST from a Date
+ */
+export function getISTDateKeyFromDate(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: IST_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
+
+  if (!year || !month || !day) {
+    return '';
+  }
+
+  return `${year}-${month}-${day}`;
 }

@@ -67,6 +67,40 @@ function parseContext(rawContext: string | string[] | undefined): Record<string,
   return undefined;
 }
 
+function extractAssistantText(payload: any): string {
+  const candidates = [
+    payload?.content,
+    payload?.assistant_response,
+    payload?.response,
+    payload?.reply,
+    payload?.message,
+    payload?.result?.content,
+    payload?.result?.assistant_response,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string') {
+      const trimmed = candidate.trim();
+      if (trimmed && trimmed !== '...' && trimmed !== '…') {
+        return trimmed;
+      }
+    }
+  }
+
+  return '';
+}
+
+function renderBoldText(content: string) {
+  const chunks = content.split(/(\*\*[^*]+\*\*)/g);
+  return chunks.map((chunk, index) => {
+    const isBold = /^\*\*[^*]+\*\*$/.test(chunk);
+    if (!isBold) {
+      return <Text key={`text-${index}`}>{chunk}</Text>;
+    }
+    return <Text key={`bold-${index}`} style={{ fontWeight: '700' }}>{chunk.slice(2, -2)}</Text>;
+  });
+}
+
 export default function ChatScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -343,11 +377,12 @@ export default function ChatScreen() {
         throw new Error(message);
       }
 
+      const assistantContent = extractAssistantText(data);
       const assistantMsg: Message = {
         id: `${Date.now()}-assistant`,
         role: 'assistant',
-        content: typeof data?.content === 'string' && data.content.trim()
-          ? data.content
+        content: assistantContent
+          ? assistantContent
           : 'I am here with you. Tell me more about how this day felt for you.'
       };
 
@@ -592,7 +627,7 @@ export default function ChatScreen() {
         )}
         <View style={[styles.messageBubble, isUser ? styles.messageBubbleUser : styles.messageBubbleAssistant]}>
           <Text style={[styles.messageText, isUser ? styles.messageTextUser : styles.messageTextAssistant]}>
-            {item.content}
+            {renderBoldText(item.content)}
           </Text>
         </View>
       </View>

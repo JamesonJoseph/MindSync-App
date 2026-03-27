@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { auth } from '../firebaseConfig';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { getApiBaseUrl } from '../utils/api';
+import { getApiBaseUrl, parseApiResponse } from '../utils/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const EMOTION_ANALYZED_KEY = 'mindSync_lastEmotionAnalysis';
@@ -87,13 +87,14 @@ export default function HomeScreen() {
         formData.append('userEmail', userEmail);
 
         const apiUrl = getApiBaseUrl();
-        const response = await fetch(`${apiUrl}/api/emotion`, {
+        const { authFetch } = await import('../utils/api');
+        const response = await authFetch(`${apiUrl}/api/emotion`, {
           method: 'POST',
           body: formData,
         });
 
+        const data = await parseApiResponse<any>(response);
         if (response.ok) {
-          const data = await response.json();
           const emotion = data.emotion;
           const details = data.details || "I've analyzed your subtle facial cues.";
           
@@ -118,6 +119,12 @@ export default function HomeScreen() {
           } else {
             setSecretPrompt("Have a peaceful and balanced day.");
           }
+        } else {
+          throw new Error(
+            typeof data?.error === 'string'
+              ? data.error
+              : 'Emotion analysis request failed.'
+          );
         }
       }
     } catch (error) {

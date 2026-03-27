@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { auth } from '../firebaseConfig';
 import { getApiBaseUrl } from '../utils/api';
-import { fromISOToIST, toISTISOString } from '../utils/timezone';
+import { getISTDateKeyFromDate, toISTISOString } from '../utils/timezone';
 
 type Task = {
   _id: string;
@@ -105,20 +105,13 @@ export default function TasksScreen() {
 
    const getISTDateKey = (isoString?: string): string => {
      if (!isoString) return '';
-     const istDate = fromISOToIST(isoString);
-     const year = istDate.getFullYear();
-     const month = String(istDate.getMonth() + 1).padStart(2, '0');
-     const day = String(istDate.getDate()).padStart(2, '0');
-     return `${year}-${month}-${day}`;
+     const parsed = new Date(isoString);
+     if (Number.isNaN(parsed.getTime())) return '';
+     return getISTDateKeyFromDate(parsed);
    };
 
   const getDateKeyFromDate = (date: Date): string => {
-    // Convert to IST to ensure consistency with getISTDateKey
-    const istDate = fromISOToIST(date.toISOString());
-    const year = istDate.getFullYear();
-    const month = String(istDate.getMonth() + 1).padStart(2, '0');
-    const day = String(istDate.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return getISTDateKeyFromDate(date);
   };
 
   const loadData = async () => {
@@ -494,7 +487,7 @@ export default function TasksScreen() {
 
   const handleSelectType = (type: 'event' | 'task' | 'birthday') => {
     setShowAddMenu(false);
-    const dateString = selectedDate.toISOString().split('T')[0];
+    const dateString = getDateKeyFromDate(selectedDate);
     
     if (type === 'task') {
       router.push(`/add-task?date=${dateString}`);

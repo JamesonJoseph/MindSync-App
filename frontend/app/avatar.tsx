@@ -53,6 +53,24 @@ const SOURCES = {
   speaking_compassionate: require('../assets/avatar/Speaking_Compassionate.mp4'),
 };
 
+function pickFirstText(values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+    if (Array.isArray(value)) {
+      const joined = value
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .join('. ')
+        .trim();
+      if (joined) {
+        return joined;
+      }
+    }
+  }
+  return '';
+}
+
 export default function AvatarScreen() {
   KeepAwake.useKeepAwake();
   const router = useRouter();
@@ -145,7 +163,15 @@ export default function AvatarScreen() {
   // SPEECH ENGINE: Simplified for maximum reliability
   useEffect(() => {
     const isSpeaking = avatarState.startsWith('speaking');
-    const responseText = aiResponse ? (Array.isArray(aiResponse.suggestions) ? aiResponse.suggestions.join('. ') : aiResponse.suggestions) : null;
+    const responseText = aiResponse
+      ? pickFirstText([
+          aiResponse.suggestions,
+          (aiResponse as any).assistant_response,
+          (aiResponse as any).response,
+          (aiResponse as any).reply,
+          (aiResponse as any).message,
+        ])
+      : null;
 
     if (isSpeaking && responseText && responseSpokenRef.current !== responseText) {
       responseSpokenRef.current = responseText;
@@ -232,6 +258,9 @@ export default function AvatarScreen() {
       // but we keep them for extra context if needed by the backend logic.
       formData.append('userId', userId || 'anonymous');
       formData.append('userEmail', userEmail || 'anonymous@example.com');
+      formData.append('language', 'auto');
+      formData.append('locale', Intl.DateTimeFormat().resolvedOptions().locale || 'en-IN');
+      formData.append('languageHints', 'en-IN,ml-IN');
 
       const { authFetch } = await import('../utils/api');
       const response = await authFetch('/api/avatar/analyze-voice', {
@@ -241,8 +270,28 @@ export default function AvatarScreen() {
       });
 
       if (response.ok) {
-        const data: VoiceAnalysis = await response.json();
-        setTranscript(data.transcript || 'No speech detected');
+        const rawData: any = await response.json();
+        const normalizedSuggestions = pickFirstText([
+          rawData?.suggestions,
+          rawData?.assistant_response,
+          rawData?.response,
+          rawData?.reply,
+          rawData?.message,
+        ]);
+        const normalizedTranscript = pickFirstText([
+          rawData?.transcript,
+          rawData?.text,
+          rawData?.recognized_text,
+        ]);
+        const data: VoiceAnalysis = {
+          ...rawData,
+          transcript: normalizedTranscript || 'No speech detected',
+          suggestions: normalizedSuggestions || 'I am here with you. Tell me what is on your mind right now.',
+          emotion: typeof rawData?.emotion === 'string' ? rawData.emotion : 'neutral',
+          confidence: typeof rawData?.confidence === 'number' ? rawData.confidence : 0,
+          earlyWarning: rawData?.earlyWarning,
+        };
+        setTranscript(data.transcript);
         setAiResponse(data);
         setShowResponse(true);
         if (data.suggestions) {
